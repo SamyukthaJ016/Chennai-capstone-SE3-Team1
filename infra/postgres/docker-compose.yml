@@ -1,0 +1,64 @@
+# =====================================================================
+# infra/postgres/docker-compose.yml
+# Team 1 - Trade Database (Postgres) | SEC3-95
+#
+#   cd infra/postgres && docker compose up -d
+#
+# brings up a Postgres that has already applied every file in
+# migrations/ and loaded every file in seed/, with no further commands
+# and nothing to export by hand first. That is what Sprint 6 needs.
+#
+# migrations/ and seed/ are MOUNTED from the repository rather than
+# copied into an image, so there is exactly one copy of the schema in
+# this project and the container can never be built from a stale one.
+#
+# The init scripts only run when the data volume is empty. To rebuild
+# from scratch:
+#
+#   docker compose down -v && docker compose up -d
+#
+# NOTE: this file has not been executed - the machine it was written on
+# has no Docker installed. Everything it runs (the same psql commands,
+# in the same order, against the same files) is exercised by
+# scripts/apply_db.py, which has been run and verified.
+# =====================================================================
+
+services:
+  postgres:
+    # Debian-based, not -alpine: the init script needs bash and sha256sum,
+    # and this image is the one that definitely has both.
+    image: postgres:17
+    container_name: team1_trade_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-trading_platform}
+      # Deterministic collation, so ORDER BY does not depend on the host.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # The single source of truth for the schema and its data.
+      - ../../migrations:/migrations:ro
+      - ../../seed:/seed:ro
+      # Runs once, on an empty data volume.
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # The database is only "healthy" once the init scripts have finished
+      # and the marker table exists, so `depends_on: service_healthy`
+      # actually means "the schema is ready", not just "the port is open".
+      test:
+        - CMD-SHELL
+        - >-
+          pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -q &&
+          psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -tAc
+          "SELECT 1 FROM schema_migrations LIMIT 1" | grep -q 1
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 20s
+
+volumes:
+  pgdata:

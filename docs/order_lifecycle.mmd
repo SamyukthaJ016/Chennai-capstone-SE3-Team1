@@ -1,0 +1,26 @@
+flowchart TB
+    place(["Client places an order<br/>(INTRADAY or DELIVERY)"])
+
+    place --> orders["<b>ORDERS</b><br/>row written on receipt<br/>status = RECEIVED<br/>idempotency_key is UNIQUE"]
+
+    orders --> queue["<b>IN_PROGRESS</b><br/>picked up for execution<br/>status = IN_PROGRESS"]
+
+    queue --> outcome{"Execution<br/>outcome"}
+
+    outcome -- "filled" --> success["<b>TRANSACTION_SUCCESS</b><br/>trigger sets status = SUCCESS"]
+    outcome -- "rejected" --> failure["<b>TRANSACTION_FAILURES</b><br/>trigger sets status = FAILED<br/>reason_for_failure recorded"]
+
+    success --> route{"orders.product_type"}
+
+    route -- "DELIVERY" --> holding["<b>PORTFOLIO_HOLDING</b><br/>upsert (client, instrument)<br/>quantity >= 0"]
+    route -- "INTRADAY" --> positions["<b>PORTFOLIO_POSITIONS</b><br/>upsert (client, instrument)<br/>quantity signed, may be short"]
+
+    failure --> nochange(["No portfolio change"])
+
+    classDef table fill:#eef0ff,stroke:#5b6bbf,stroke-width:1px,color:#1a1a2e
+    classDef decision fill:#fff6e5,stroke:#c98a1b,stroke-width:1px,color:#1a1a2e
+    classDef terminal fill:#eaf7ee,stroke:#3f8f5b,stroke-width:1px,color:#1a1a2e
+
+    class orders,queue,success,failure,holding,positions table
+    class outcome,route decision
+    class place,nochange terminal

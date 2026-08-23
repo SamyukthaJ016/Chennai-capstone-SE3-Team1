@@ -1,0 +1,9 @@
+# Shell scripts MUST keep LF endings. This one is mounted into a Linux
+# container by infra/postgres/docker-compose.yml, and a CRLF shebang fails
+# there with "bad interpreter: /usr/bin/env bash^M" - on Windows checkouts
+# only, which makes it a miserable bug to track down.
+*.sh text eol=lf
+
+# Binary assets: never touch line endings, never try to diff them.
+*.png binary
+*.pdf binary

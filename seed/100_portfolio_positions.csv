@@ -1,0 +1,5 @@
+position_id,client_id,instrument_id,quantity,avg_price
+1,1,2,0,0.0000
+2,2,4,-30,1698.5000
+3,3,7,200,923.1000
+4,5,4,0,0.0000

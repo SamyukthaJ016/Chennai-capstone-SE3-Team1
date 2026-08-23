@@ -1,0 +1,97 @@
+erDiagram
+    BANK_ACCOUNT {
+        varchar   account_number  PK "IBAN-style, up to 34 chars"
+        varchar   name
+        varchar   phone
+        varchar   email
+        decimal   balance            "DECIMAL(18,2), never negative"
+        varchar   bank_name
+        varchar   ifsc_code
+        int       version            "optimistic lock: bump on every balance write"
+    }
+    CLIENTS {
+        int       client_id       PK
+        varchar   account_number  FK
+        varchar   name
+        varchar   email           UK "FK target for AUTH"
+        varchar   phone
+        timestamp created_on
+        varchar   status             "ACTIVE, SUSPENDED, CLOSED - row never deleted"
+    }
+    AUTH {
+        varchar   email           PK,FK
+        varchar   password           "hash only, never plaintext"
+        timestamp created
+        timestamp updated
+    }
+    ORDERS {
+        int       order_id        PK
+        int       client_id       FK
+        int       instrument_id   FK
+        varchar   type               "BUY or SELL"
+        varchar   product_type       "INTRADAY to positions, DELIVERY to holding"
+        int       quantity           "greater than zero"
+        decimal   price_per_unit     "DECIMAL(18,4)"
+        varchar   exchange
+        varchar   idempotency_key UK "DB-enforced, a retry raises 23505"
+        varchar   status             "RECEIVED, IN_PROGRESS, SUCCESS, FAILED"
+        timestamp order_timestamp
+    }
+    PORTFOLIO_HOLDING {
+        int       holding_id      PK
+        int       client_id       FK
+        int       instrument_id   FK
+        int       quantity           "DELIVERY book, never negative"
+        decimal   avg_price          "weighted average cost, DECIMAL(18,4)"
+        timestamp created_at
+        timestamp updated
+    }
+    PORTFOLIO_POSITIONS {
+        int       position_id     PK
+        int       client_id       FK
+        int       instrument_id   FK
+        int       quantity           "INTRADAY book, signed: negative is short"
+        decimal   avg_price          "weighted average of the open leg"
+        timestamp created_at
+        timestamp updated
+    }
+    IN_PROGRESS {
+        int       progress_id     PK
+        int       order_id        FK "composite FK with instrument_id"
+        int       instrument_id   FK "must equal the order's instrument"
+        int       quantity
+        timestamp entered_timestamp
+    }
+    TRANSACTION_SUCCESS {
+        int       transaction_id  PK
+        int       order_id        FK,UK "one row per order, at most"
+        int       quantity
+        decimal   value              "DECIMAL(18,2)"
+        timestamp transaction_timestamp
+    }
+    TRANSACTION_FAILURES {
+        int       transaction_id  PK
+        int       order_id        FK,UK "one row per order, at most"
+        int       quantity
+        decimal   value              "DECIMAL(18,2)"
+        varchar   reason_for_failure
+        timestamp transaction_timestamp
+    }
+    INSTRUMENTS {
+        int       instrument_id   PK
+        varchar   instrument_name UK
+        boolean   is_active          "FALSE once delisted; the row is kept"
+        timestamp delisted_on        "NULL exactly when is_active is TRUE"
+    }
+
+    BANK_ACCOUNT         ||--o{ CLIENTS              : funds
+    CLIENTS              ||--o| AUTH                 : authenticates
+    CLIENTS              ||--o{ ORDERS               : places
+    CLIENTS              ||--o{ PORTFOLIO_HOLDING    : owns
+    CLIENTS              ||--o{ PORTFOLIO_POSITIONS  : owns
+    ORDERS               ||--o| IN_PROGRESS          : queued_as
+    ORDERS               ||--o| TRANSACTION_SUCCESS  : settles_as
+    ORDERS               ||--o| TRANSACTION_FAILURES : fails_as
+    ORDERS               }o--|| INSTRUMENTS          : traded_in
+    PORTFOLIO_HOLDING    }o--|| INSTRUMENTS          : held_as
+    PORTFOLIO_POSITIONS  }o--|| INSTRUMENTS          : held_as
