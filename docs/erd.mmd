@@ -1,0 +1,97 @@
+erDiagram
+    BANK_ACCOUNT {
+        varchar   account_number  PK
+        varchar   name
+        varchar   phone
+        varchar   email
+        decimal   balance
+        varchar   bank_name
+        varchar   ifsc_code
+        int       version
+    }
+    CLIENTS {
+        int       client_id       PK
+        varchar   account_number  FK
+        varchar   name
+        varchar   email           UK
+        varchar   phone
+        timestamp created_on
+        varchar   status
+    }
+    AUTH {
+        varchar   email           PK,FK
+        varchar   password
+        timestamp created
+        timestamp updated
+    }
+    ORDERS {
+        int       order_id        PK
+        int       client_id       FK
+        int       instrument_id   FK
+        varchar   type
+        varchar   product_type
+        int       quantity
+        decimal   price_per_unit
+        varchar   exchange
+        varchar   idempotency_key UK
+        varchar   status
+        timestamp order_timestamp
+    }
+    PORTFOLIO_HOLDING {
+        int       holding_id      PK
+        int       client_id       FK
+        int       instrument_id   FK
+        int       quantity
+        decimal   avg_price
+        timestamp created_at
+        timestamp updated
+    }
+    PORTFOLIO_POSITIONS {
+        int       position_id     PK
+        int       client_id       FK
+        int       instrument_id   FK
+        int       quantity
+        decimal   avg_price
+        timestamp created_at
+        timestamp updated
+    }
+    IN_PROGRESS {
+        int       progress_id     PK
+        int       order_id        FK
+        int       instrument_id   FK
+        int       quantity
+        timestamp entered_timestamp
+    }
+    TRANSACTION_SUCCESS {
+        int       transaction_id  PK
+        int       order_id        FK,UK
+        int       quantity
+        decimal   value
+        timestamp transaction_timestamp
+    }
+    TRANSACTION_FAILURES {
+        int       transaction_id  PK
+        int       order_id        FK,UK
+        int       quantity
+        decimal   value
+        varchar   reason_for_failure
+        timestamp transaction_timestamp
+    }
+    INSTRUMENTS {
+        int       instrument_id   PK
+        varchar   instrument_name UK
+        boolean   is_active
+        timestamp delisted_on
+    }
+
+    BANK_ACCOUNT         ||--o{ CLIENTS              : funds
+    CLIENTS              ||--o| AUTH                 : authenticates
+    CLIENTS              ||--o{ ORDERS               : places
+    CLIENTS              ||--o{ PORTFOLIO_HOLDING    : owns
+    CLIENTS              ||--o{ PORTFOLIO_POSITIONS  : owns
+    ORDERS               ||--o| IN_PROGRESS          : queued_as
+    ORDERS               ||--o| TRANSACTION_SUCCESS  : settles_as
+    ORDERS               ||--o| TRANSACTION_FAILURES : fails_as
+    ORDERS               }o--|| INSTRUMENTS          : traded_in
+    PORTFOLIO_HOLDING    }o--|| INSTRUMENTS          : held_as
+    PORTFOLIO_POSITIONS  }o--|| INSTRUMENTS          : held_as

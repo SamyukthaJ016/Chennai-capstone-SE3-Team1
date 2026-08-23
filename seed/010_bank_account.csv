@@ -1,0 +1,7 @@
+account_number,name,phone,email,balance,bank_name,ifsc_code
+IN45HDFC0000001234567,Aarav Mehta,+919812345001,aarav.mehta@example.com,485200.00,HDFC Bank,HDFC0001234
+IN45ICIC0000002345678,Diya Sharma,+919812345002,diya.sharma@example.com,129750.50,ICICI Bank,ICIC0002345
+IN45SBIN0000003456789,Rohan Iyer,+919812345003,rohan.iyer@example.com,873400.25,State Bank,SBIN0003456
+IN45AXIS0000004567890,Meera Nair,+919812345004,meera.nair@example.com,64300.00,Axis Bank,UTIB0004567
+IN45KKBK0000005678901,Vikram Rao,+919812345005,vikram.rao@example.com,251000.75,Kotak Mahindra,KKBK0005678
+IN45YESB0000006789012,Sanya Kapoor,+919812345006,sanya.kapoor@example.com,0.00,Yes Bank,YESB0006789

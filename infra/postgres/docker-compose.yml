@@ -1,0 +1,31 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: team1_trade_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-trading_platform}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../../migrations:/migrations:ro
+      - ../../seed:/seed:ro
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -q &&
+          psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -tAc
+          "SELECT 1 FROM schema_migrations LIMIT 1" | grep -q 1
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 20s
+
+volumes:
+  pgdata:

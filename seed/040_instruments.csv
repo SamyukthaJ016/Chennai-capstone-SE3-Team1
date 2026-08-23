@@ -1,0 +1,9 @@
+instrument_id,instrument_name,is_active,delisted_on
+1,RELIANCE,true,
+2,TCS,true,
+3,INFY,true,
+4,HDFCBANK,true,
+5,ICICIBANK,true,
+6,ITC,true,
+7,TATAMOTORS,true,
+8,LEGACYCORP,false,2025-11-14 15:30:00

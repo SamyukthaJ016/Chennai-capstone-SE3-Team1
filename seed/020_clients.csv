@@ -1,0 +1,7 @@
+client_id,account_number,name,email,phone,status
+1,IN45HDFC0000001234567,Aarav Mehta,aarav.mehta@example.com,+919812345001,ACTIVE
+2,IN45ICIC0000002345678,Diya Sharma,diya.sharma@example.com,+919812345002,ACTIVE
+3,IN45SBIN0000003456789,Rohan Iyer,rohan.iyer@example.com,+919812345003,ACTIVE
+4,IN45AXIS0000004567890,Meera Nair,meera.nair@example.com,+919812345004,SUSPENDED
+5,IN45KKBK0000005678901,Vikram Rao,vikram.rao@example.com,+919812345005,ACTIVE
+6,IN45YESB0000006789012,Sanya Kapoor,sanya.kapoor@example.com,+919812345006,CLOSED

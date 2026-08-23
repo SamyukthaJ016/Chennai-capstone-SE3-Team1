@@ -1,0 +1,5 @@
+# Must stay LF: mounted into a Linux container, a CRLF shebang breaks it.
+*.sh text eol=lf
+
+*.png binary
+*.pdf binary
