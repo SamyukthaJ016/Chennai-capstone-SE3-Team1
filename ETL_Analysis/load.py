@@ -39,6 +39,8 @@ import uuid
 from datetime import date, datetime
 from pathlib import Path
 
+from . import transform as transform_module
+
 DEFAULT_DB_PATH = "warehouse.duckdb"
 SCHEMA_FILE = Path(__file__).parent / "analytics_schema.sql"
 
@@ -175,6 +177,16 @@ INSERT INTO load_run (
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
+INSERT_METRIC_SQL = """
+INSERT INTO run_metric (
+    run_id, symbol, metric, label, unit, value, computed_at
+) VALUES (?, ?, ?, ?, ?, ?, ?)
+"""
+
+DELETE_METRIC_SQL = "DELETE FROM run_metric WHERE run_id = ? AND symbol = ?"
+
+DELETE_RUN_SQL = "DELETE FROM load_run WHERE run_id = ? AND symbol = ?"
+
 RECONCILE_SQL = """
 SELECT run_id, symbol, candles_in, rows_kept, rows_quarantined
   FROM load_run
@@ -250,6 +262,23 @@ def write_result(con, result: dict, run_id: str) -> int:
             [quarantine_row(b, run_id, now) for b in quarantined],
         )
 
+    # Analytical metrics, long format. Replaced per (run_id, symbol) so a
+    # repeated write within one run does not duplicate them.
+    con.execute(DELETE_METRIC_SQL, [run_id, symbol])
+    metric_rows = transform_module.metrics(result)
+    if metric_rows:
+        con.executemany(
+            INSERT_METRIC_SQL,
+            [
+                (run_id, m["symbol"], m["metric"], m["label"], m["unit"],
+                 m["value"], now)
+                for m in metric_rows
+            ],
+        )
+
+    # The ledger row is replaced for this (run_id, symbol) too, so
+    # write_result is idempotent across all four tables rather than three.
+    con.execute(DELETE_RUN_SQL, [run_id, symbol])
     con.execute(INSERT_RUN_SQL, list(run_row(result, run_id, now)))
     return len(rows)
 
@@ -296,6 +325,7 @@ def load_many(
         "rows_quarantined": 0,
         "reasons": {},
         "repairs": {},
+        "metrics_written": 0,
         "reconciliation_failures": [],
     }
 
@@ -312,6 +342,7 @@ def load_many(
                 totals["reasons"][reason] = totals["reasons"].get(reason, 0) + count
             for code, count in summary.get("repair_counts", {}).items():
                 totals["repairs"][code] = totals["repairs"].get(code, 0) + count
+            totals["metrics_written"] += len(transform_module.metrics(result))
             log.info(
                 "loaded %s: %d row(s), %d quarantined",
                 summary["symbol"], summary["rows_kept"], summary["rows_quarantined"],

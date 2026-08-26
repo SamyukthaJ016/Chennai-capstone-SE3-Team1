@@ -13,6 +13,7 @@ ETL_Analysis/
 ├── transform.py            TRANSFORM         - pure: data in, data out
 ├── load.py                 LOAD              - writes to DuckDB
 ├── load_print.py           LOAD (console)    - the earlier print-only loader
+├── report.py               the HTML dashboard, inline SVG, no dependencies
 ├── analytics_schema.sql    DDL for the analytical store
 ├── pipeline.py             the fourth module - wiring only
 ├── fixtures/               three canned API responses, one corrupted
@@ -32,8 +33,12 @@ python -m ETL_Analysis.pipeline --print               # console instead of DuckD
 python -m ETL_Analysis.pipeline --symbols RELIANCE.NS # one symbol
 python -m ETL_Analysis.pipeline --strict              # quarantine everything
 python -m ETL_Analysis.pipeline -v                    # verbose logging
+python -m ETL_Analysis.pipeline --report out/run.html # where to write the report
+python -m ETL_Analysis.pipeline --no-report           # skip the report
 python -m ETL_Analysis.pipeline --live                # once a real key exists
 ```
+
+Every run writes `report.html` (or wherever `--report` points).
 
 `duckdb` is the only dependency for the default path, and `--print` needs none
 at all. `extract_live.py` needs `requests`.
@@ -143,6 +148,7 @@ DuckDB, one file on disk. Three tables, defined in `analytics_schema.sql`:
 | `daily_price` | one row per symbol per trading day | the analysis rows: cleaned, typed, with derived measures |
 | `quarantined_candle` | one row per rejected candle | the dead-letter table, original payload attached |
 | `load_run` | one row per symbol per run | the ledger: counts, dates, whether repair was on |
+| `run_metric` | one row per metric per symbol per run | the analytical results, 28 measures |
 
 ### Why candles are not in FACT_TRADES
 
@@ -164,6 +170,65 @@ already carries `date_key` in `YYYYMMDD` form and an `exchange` derived by the
 rule the contract states, so it can join to `dim_date` and `dim_instrument`
 the moment they exist.
 
+### The metrics
+
+`run_metric` is **long format** — one row per metric, not one column per
+metric. A new measure needs no `ALTER TABLE`, a report renders whatever it
+finds without knowing the metric list in advance, and comparing one measure
+across runs is a single `WHERE` rather than a column-by-column diff.
+
+Measures computed (all in `transform.py`, since aggregating and deriving are
+the transform's job): first/last/min/max/mean close, period return, average
+daily return, daily volatility as the sample standard deviation of returns,
+maximum drawdown, best and worst day with dates, largest daily move, average
+daily range, up/down/flat day counts, average/max/min volume, total turnover,
+and the row-disposition counts.
+
+```sql
+-- one measure, every symbol, newest run
+SELECT symbol, value FROM run_metric
+ WHERE metric = 'volatility_pct'
+   AND run_id = (SELECT max(run_id) FROM run_metric)
+ ORDER BY value DESC;
+
+-- how a measure moved between runs
+SELECT run_id, value FROM run_metric
+ WHERE symbol = 'RELIANCE.NS' AND metric = 'period_return_pct'
+ ORDER BY run_id;
+```
+
+Volatility and drawdown are verified in the test suite against
+`statistics.stdev` and a brute-force peak-to-trough search respectively, so a
+wrong formula fails rather than being confirmed by its own output.
+
+## The report
+
+`report.html`, rewritten every run: a rebased comparison of every symbol, then
+per symbol a closing-price line chart, a daily volume bar chart, the measures,
+and the data-quality tables showing exactly what was quarantined and what was
+repaired.
+
+**No dependencies and no JavaScript.** The sprint requires artefacts that open
+without a network, which rules out anything fetching its library from a CDN.
+plotly satisfies that by inlining its own JS; this goes further and emits
+hand-built inline SVG, so there is no library to pin and the file renders in a
+browser, an email, or a PDF export. The trade-off is static charts rather than
+interactive ones — if the review wants hover and zoom, swap `report.py` for a
+plotly implementation writing to the same path, since `write_report()` is the
+only entry point the pipeline calls.
+
+Charts are built for the sprint's readability bar: both axes labelled with
+units, titles that state the finding rather than naming the variables
+("RELIANCE.NS rose 1.08% between 01 Jul and 14 Jul 2026"), a colour-blind-safe
+palette, and a day with no reported volume drawn as `n/a` rather than as a
+zero bar — a missing figure is not a day without trading.
+
+One thing worth knowing about the multi-symbol chart: series are aligned **by
+date**, not by position. Symbols have different trading days, and positioning
+by list index would draw one symbol's fourth point on another symbol's fourth
+date, silently claiming a price moved on a day it did not. There is a test
+named for exactly that.
+
 ### Idempotency
 
 The contract requires re-running a load not to double-count. `daily_price` is
@@ -180,12 +245,31 @@ after every run and reported by the pipeline. A non-empty result means a row was
 lost between arriving and landing — the failure this whole design exists to make
 visible.
 
-### Accesing DuckDb
+### Poking at the store
 
-run 
-pip install duckdb
-winget install duckdb.cli
-duckdb -ui warehouse.duckdb
+```bash
+duckdb warehouse.duckdb
+```
+
+```sql
+-- what landed
+SELECT symbol, count(*), min(trade_date), max(trade_date)
+  FROM daily_price GROUP BY symbol;
+
+-- what did not, and why
+SELECT symbol, reason, raw_date, detail FROM quarantined_candle;
+
+-- observed data only, excluding vendor-interpolated and repaired rows
+SELECT * FROM daily_price WHERE NOT synthetic AND NOT repaired;
+
+-- the load history
+SELECT run_id, symbol, candles_in, rows_kept, rows_repaired, rows_quarantined
+  FROM load_run ORDER BY loaded_at DESC;
+```
+
+That last filter matters for `claims.md`: a claim resting on repaired or
+synthetic rows is a claim resting on numbers nobody observed, and the flags are
+there so a chart can exclude them.
 
 ## Testing
 
@@ -194,7 +278,7 @@ pip install pytest
 pytest ETL_Analysis/tests -v
 ```
 
-65 tests. `test_load.py` runs the **real** DDL and the **real** SQL statements
+107 tests. `test_load.py` runs the **real** DDL and the **real** SQL statements
 against an in-memory SQLite mirror — DuckDB and SQLite share the `?` placeholder
 style and accept the same ANSI DDL here, so statement correctness, column-order
 alignment and delete-then-insert idempotency are all covered without requiring
@@ -207,6 +291,6 @@ pipeline against a real DuckDB file once and check a few rows to close that gap.
 ## Still to do
 
 - `claims.md` — three business claims, each naming the chart that supports it
-- Chart artefacts (plotly, inlined JS so they open with no network)
+  (the report's chart sections are the artefacts to point at)
 - `pyproject.toml` so `pip install -e 'ETL_Analysis[dev]'` works from a clean
   machine (`tests/conftest.py` handles imports until then)

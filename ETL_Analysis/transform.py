@@ -348,7 +348,12 @@ def _derive(rows: list[dict]) -> None:
 
 
 def _summarise(symbol, candles, rows, quarantined, repair) -> dict:
-    """Aggregate the cleaned rows. Counts reconcile: kept + quarantined = in."""
+    """Aggregate the cleaned rows. Counts reconcile: kept + quarantined = in.
+
+    Aggregating and deriving are the transform's job, so every analytical
+    measure is computed here and merely persisted by the load. Nothing in this
+    function reads a socket, an environment variable or a file.
+    """
     reasons: dict[str, int] = {}
     for bad in quarantined:
         reasons[bad["reason"]] = reasons.get(bad["reason"], 0) + 1
@@ -357,10 +362,6 @@ def _summarise(symbol, candles, rows, quarantined, repair) -> dict:
     for row in rows:
         for entry in row["repairs"]:
             repair_counts[entry["code"]] = repair_counts.get(entry["code"], 0) + 1
-
-    closes = [r["close"] for r in rows]
-    volumes = [r["volume"] for r in rows if r["volume"] is not None]
-    returns = [r["daily_return_pct"] for r in rows if r["daily_return_pct"] is not None]
 
     summary = {
         "symbol": symbol,
@@ -373,22 +374,153 @@ def _summarise(symbol, candles, rows, quarantined, repair) -> dict:
         "repair_counts": repair_counts,
         "synthetic_rows": sum(1 for r in rows if r["synthetic"]),
         "missing_volume_rows": sum(1 for r in rows if r["volume"] is None),
+        "observed_rows": sum(
+            1 for r in rows if not r["synthetic"] and not r["repaired"]
+        ),
     }
     if rows:
-        summary.update({
-            "date_from": rows[0]["date"],
-            "date_to": rows[-1]["date"],
-            "close_first": rows[0]["close"],
-            "close_last": rows[-1]["close"],
-            "close_min": min(closes),
-            "close_max": max(closes),
-            "period_return_pct": round(
-                (rows[-1]["close"] - rows[0]["close"]) / rows[0]["close"] * 100, 4
-            ),
-            "avg_volume": round(sum(volumes) / len(volumes), 2) if volumes else None,
-            "max_daily_move_pct": max(returns, key=abs) if returns else None,
-        })
+        summary.update(_price_measures(rows))
     return summary
+
+
+def _price_measures(rows: list[dict]) -> dict:
+    """The analytical measures, over cleaned rows sorted by date."""
+    closes = [r["close"] for r in rows]
+    volumes = [r["volume"] for r in rows if r["volume"] is not None]
+    turnovers = [r["turnover"] for r in rows if r["turnover"] is not None]
+    returns = [r["daily_return_pct"] for r in rows
+               if r["daily_return_pct"] is not None]
+    ranges_pct = [
+        (r["high"] - r["low"]) / r["low"] * 100 for r in rows if r["low"]
+    ]
+
+    measures = {
+        "date_from": rows[0]["date"],
+        "date_to": rows[-1]["date"],
+        "trading_days": len(rows),
+        "close_first": rows[0]["close"],
+        "close_last": rows[-1]["close"],
+        "close_min": min(closes),
+        "close_max": max(closes),
+        "close_mean": round(sum(closes) / len(closes), 4),
+        "period_return_pct": round(
+            (rows[-1]["close"] - rows[0]["close"]) / rows[0]["close"] * 100, 4
+        ),
+        "avg_volume": round(sum(volumes) / len(volumes), 2) if volumes else None,
+        "max_volume": max(volumes) if volumes else None,
+        "min_volume": min(volumes) if volumes else None,
+        "total_turnover": round(sum(turnovers), 2) if turnovers else None,
+        "avg_daily_range_pct": (
+            round(sum(ranges_pct) / len(ranges_pct), 4) if ranges_pct else None
+        ),
+        "max_drawdown_pct": _max_drawdown_pct(closes),
+    }
+
+    if returns:
+        best = max(returns)
+        worst = min(returns)
+        measures.update({
+            "max_daily_move_pct": max(returns, key=abs),
+            "best_day_pct": best,
+            "worst_day_pct": worst,
+            "best_day": next(r["date"] for r in rows
+                             if r["daily_return_pct"] == best),
+            "worst_day": next(r["date"] for r in rows
+                              if r["daily_return_pct"] == worst),
+            "avg_daily_return_pct": round(sum(returns) / len(returns), 4),
+            # Sample standard deviation of daily returns: the usual measure of
+            # how much a name moves about, quoted per day rather than
+            # annualised because the fixtures cover two weeks, not a year.
+            "volatility_pct": _stdev(returns),
+            "up_days": sum(1 for r in returns if r > 0),
+            "down_days": sum(1 for r in returns if r < 0),
+            "flat_days": sum(1 for r in returns if r == 0),
+        })
+    return measures
+
+
+def _stdev(values: list[float]) -> float | None:
+    """Sample standard deviation. None below two points, where it is undefined."""
+    if len(values) < 2:
+        return None
+    mean = sum(values) / len(values)
+    variance = sum((v - mean) ** 2 for v in values) / (len(values) - 1)
+    return round(variance ** 0.5, 4)
+
+
+def _max_drawdown_pct(closes: list[float]) -> float | None:
+    """Largest peak-to-trough fall, as a negative percentage.
+
+    Measured on closes in date order: the worst a holder could have done by
+    buying at a peak and selling at the following trough. 0.0 means the series
+    never fell below a previous peak.
+    """
+    if len(closes) < 2:
+        return None
+    peak = closes[0]
+    worst = 0.0
+    for close in closes[1:]:
+        peak = max(peak, close)
+        drawdown = (close - peak) / peak * 100
+        worst = min(worst, drawdown)
+    return round(worst, 4)
+
+
+# Metrics persisted to the store, in the order a report should read them.
+# (key in summary, human label, unit)
+METRIC_SPEC = [
+    ("trading_days", "Trading days", "days"),
+    ("close_first", "First close", "price"),
+    ("close_last", "Last close", "price"),
+    ("close_min", "Lowest close", "price"),
+    ("close_max", "Highest close", "price"),
+    ("close_mean", "Mean close", "price"),
+    ("period_return_pct", "Return over period", "pct"),
+    ("avg_daily_return_pct", "Average daily return", "pct"),
+    ("volatility_pct", "Daily volatility (std dev)", "pct"),
+    ("max_drawdown_pct", "Maximum drawdown", "pct"),
+    ("best_day_pct", "Best day", "pct"),
+    ("worst_day_pct", "Worst day", "pct"),
+    ("max_daily_move_pct", "Largest daily move", "pct"),
+    ("avg_daily_range_pct", "Average daily range", "pct"),
+    ("up_days", "Up days", "days"),
+    ("down_days", "Down days", "days"),
+    ("flat_days", "Flat days", "days"),
+    ("avg_volume", "Average volume", "shares"),
+    ("max_volume", "Highest volume", "shares"),
+    ("min_volume", "Lowest volume", "shares"),
+    ("total_turnover", "Total turnover", "currency"),
+    ("candles_in", "Candles received", "rows"),
+    ("rows_kept", "Rows loaded", "rows"),
+    ("rows_repaired", "Rows repaired", "rows"),
+    ("rows_quarantined", "Rows quarantined", "rows"),
+    ("observed_rows", "Rows observed (not repaired or synthetic)", "rows"),
+    ("synthetic_rows", "Rows flagged synthetic", "rows"),
+    ("missing_volume_rows", "Rows with no volume", "rows"),
+]
+
+
+def metrics(result: dict) -> list[dict]:
+    """Flatten a transform result's summary into named metrics.
+
+    Long format -- one row per metric rather than one column per metric -- so
+    a new measure needs no schema change, and so metrics can be compared
+    across runs with a single GROUP BY.
+    """
+    summary = result["summary"]
+    out = []
+    for key, label, unit in METRIC_SPEC:
+        value = summary.get(key)
+        if value is None:
+            continue
+        out.append({
+            "symbol": summary["symbol"],
+            "metric": key,
+            "label": label,
+            "unit": unit,
+            "value": float(value),
+        })
+    return out
 
 
 def transform_many(payloads: list[dict], repair: bool = True) -> list[dict]:

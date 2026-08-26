@@ -140,3 +140,38 @@ CREATE TABLE IF NOT EXISTS load_run (
 
 -- candles_in    What arrived. candles_in = rows_kept + rows_quarantined is an
 --               invariant, and the reconciliation query below checks it.
+
+
+-- -----------------------------------------------------------------------------
+-- RUN_METRIC
+-- One row per metric per symbol per run. The analytical results.
+--
+-- Long format -- one row per metric rather than one column per metric --
+-- deliberately. A new measure needs no ALTER TABLE, a report can render
+-- whatever it finds without knowing the metric list in advance, and comparing
+-- one measure across runs is a single WHERE rather than a column-by-column
+-- diff.
+--
+-- The cost of long format is that a value column has to hold every metric, so
+-- everything is stored as DECIMAL and `unit` says how to format it. Counts,
+-- percentages and prices are all numbers; only their presentation differs.
+--
+-- Replaced per (run_id, symbol) on write, so re-running a load does not
+-- duplicate metrics.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS run_metric (
+    run_id      VARCHAR(40)    NOT NULL,
+    symbol      VARCHAR(20)    NOT NULL,
+    metric      VARCHAR(40)    NOT NULL,
+    label       VARCHAR(80)    NOT NULL,
+    unit        VARCHAR(10)    NOT NULL,
+    value       DECIMAL(24,6)  NOT NULL,
+    computed_at TIMESTAMP      NOT NULL,
+
+    CONSTRAINT pk_run_metric PRIMARY KEY (run_id, symbol, metric)
+);
+
+-- metric   The stable key from transform.METRIC_SPEC, for querying.
+-- label    The human wording, for a report to print without a lookup table.
+-- unit     One of: price, pct, shares, currency, days, rows. Tells a renderer
+--          how to format the value; it does not change the value itself.

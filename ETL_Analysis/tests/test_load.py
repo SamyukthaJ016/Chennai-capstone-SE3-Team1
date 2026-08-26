@@ -143,10 +143,54 @@ def test_run_ids_are_unique():
 # The real SQL, against the mirror
 # ---------------------------------------------------------------------------
 
-def test_schema_creates_the_three_tables(con):
+def test_schema_creates_the_four_tables(con):
     names = {r[0] for r in con.execute(
         "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-    assert {"daily_price", "quarantined_candle", "load_run"} <= names
+    assert {"daily_price", "quarantined_candle", "load_run", "run_metric"} <= names
+
+
+def test_metrics_are_written_to_the_store(con, results):
+    from ETL_Analysis import transform as T
+    reliance = next(r for r in results if r["symbol"] == "RELIANCE.NS")
+    L.write_result(con, reliance, "run-1")
+    stored = con.scalar(
+        "SELECT count(*) FROM run_metric WHERE symbol='RELIANCE.NS'")
+    assert stored == len(T.metrics(reliance))
+    assert stored > 15
+
+
+def test_stored_metrics_keep_their_label_and_unit(con, results):
+    L.write_result(con, results[0], "run-1")
+    row = con.execute(
+        "SELECT label, unit FROM run_metric WHERE metric='period_return_pct'"
+    ).fetchall()[0]
+    assert row[0] == "Return over period"
+    assert row[1] == "pct"
+
+
+def test_a_metric_value_round_trips(con, results):
+    reliance = next(r for r in results if r["symbol"] == "RELIANCE.NS")
+    L.write_result(con, reliance, "run-1")
+    stored = con.execute(
+        "SELECT value FROM run_metric "
+        "WHERE symbol='RELIANCE.NS' AND metric='volatility_pct'"
+    ).fetchall()[0][0]
+    assert stored == pytest.approx(reliance["summary"]["volatility_pct"], abs=1e-4)
+
+
+def test_rewriting_the_same_run_does_not_duplicate_metrics(con, results):
+    L.write_result(con, results[0], "run-1")
+    first = con.scalar("SELECT count(*) FROM run_metric")
+    L.write_result(con, results[0], "run-1")
+    assert con.scalar("SELECT count(*) FROM run_metric") == first
+
+
+def test_a_second_run_keeps_both_sets_of_metrics(con, results):
+    """Metrics are per run, so two runs can be compared."""
+    L.write_result(con, results[0], "run-1")
+    L.write_result(con, results[0], "run-2")
+    runs = con.execute("SELECT DISTINCT run_id FROM run_metric").fetchall()
+    assert len(runs) == 2
 
 
 def test_ensure_schema_is_safe_to_run_twice(con):

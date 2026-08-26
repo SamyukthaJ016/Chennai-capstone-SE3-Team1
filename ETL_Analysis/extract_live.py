@@ -1,3 +1,36 @@
+"""Live extract: the real Fauxnance client.
+
+Same callable contract as `extract_fixtures.extract`, so `pipeline.py --live`
+swaps one for the other and transform and load are untouched.
+
+Not exercised yet: the key in circulation is a dummy. It is written to the
+sprint's requirements so it works the day a real key lands.
+
+THE KEY
+    Read from FAUXNANCE_API_KEY and from nowhere else. Never a literal in
+    source, a test, a fixture or a committed notebook. Never logged.
+
+THE CACHE
+    Raw responses are cached to `.cache/`, keyed by symbol and range, so
+    re-running the pipeline costs nothing against the 2000/day quota. The RAW
+    response is cached, not the cleaned frame, because changing the transform
+    is the thing you do most and it must not need a fresh pull.
+
+ERROR HANDLING
+    Four cases, told apart, because they need different answers:
+
+    | What happened            | How you know          | What we do            |
+    |--------------------------|-----------------------|-----------------------|
+    | Daily quota exhausted    | 429 + Retry-After     | Stop, say so plainly  |
+    | The request is wrong     | Other 4xx (401/404/400)| Fail symbol, carry on|
+    | Nothing reached service  | Connection error/timeout| Retry w/ backoff    |
+    | Response arrived, wrong  | 200 + bad candle      | Transform's problem   |
+
+    The fourth is deliberately absent from this module: a high below a low is
+    not an HTTP problem, and deciding about it here would put cleaning logic
+    in extract.
+"""
+
 from __future__ import annotations
 
 import hashlib

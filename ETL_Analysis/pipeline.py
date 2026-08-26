@@ -21,7 +21,8 @@ import logging
 import sys
 
 from . import (extract_fixtures, load as load_module,
-               load_print as load_print_module, transform as transform_module)
+               load_print as load_print_module, report as report_module,
+               transform as transform_module)
 
 DEFAULT_SYMBOLS = ["RELIANCE.NS", "INFY.NS", "TATASTEEL.BO"]
 
@@ -30,7 +31,8 @@ log = logging.getLogger("pipeline")
 
 def run(symbols: list[str], extract_fn=None, show_rows: int | None = None,
         repair: bool = True, db_path: str = load_module.DEFAULT_DB_PATH,
-        to_console: bool = False) -> int:
+        to_console: bool = False,
+        report_path: str | None = report_module.DEFAULT_REPORT_PATH) -> int:
     """Run the pipeline over `symbols`. Returns a process exit code.
 
     `extract_fn` is injected so the live client can be substituted without
@@ -69,6 +71,17 @@ def run(symbols: list[str], extract_fn=None, show_rows: int | None = None,
             log.error("%s", exc)
             return 1
 
+    # --- REPORT ----------------------------------------------------------
+    # Not an ETL step: renders what the pipeline produced. Written after
+    # the load so a report only ever describes data that actually landed.
+    if report_path:
+        written = report_module.write_report(
+            results, totals.get('run_id', 'local'), transform_module.metrics,
+            report_path,
+        )
+        totals['report_path'] = written
+        log.info('report: %s', written)
+
     _report(totals, failures)
     return 0
 
@@ -99,6 +112,10 @@ def _report(totals: dict, failures: list) -> None:
             print(f"      {entry}")
     elif totals.get("db_path"):
         print(f"  reconciled ......... candles_in = kept + quarantined")
+    if totals.get("report_path"):
+        print(f"  report ............. {totals['report_path']}")
+    if totals.get("metrics_written"):
+        print(f"  metrics stored ..... {totals['metrics_written']}")
     if failures:
         print(f"  symbols failed ..... {len(failures)}")
         for symbol, message in failures:
@@ -118,6 +135,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="DuckDB file to load into (default: %(default)s)")
     parser.add_argument("--print", dest="to_console", action="store_true",
                         help="print to the console instead of loading DuckDB")
+    parser.add_argument("--report", default=report_module.DEFAULT_REPORT_PATH,
+                        help="HTML report to write (default: %(default)s)")
+    parser.add_argument("--no-report", action="store_true",
+                        help="skip writing the HTML report")
     parser.add_argument("--strict", action="store_true",
                         help="quarantine every defect instead of repairing "
                              "defects 4, 5 and 6")
@@ -139,7 +160,8 @@ def main(argv: list[str] | None = None) -> int:
 
     return run(args.symbols, extract_fn=extract_fn, show_rows=args.rows,
                repair=not args.strict, db_path=args.db,
-               to_console=args.to_console)
+               to_console=args.to_console,
+               report_path=None if args.no_report else args.report)
 
 
 if __name__ == "__main__":
