@@ -11,7 +11,9 @@ ETL_Analysis/
 ├── extract_fixtures.py     EXTRACT (offline) - reads fixtures/, no network
 ├── extract_live.py         EXTRACT (live)    - real API, key from env, cached
 ├── transform.py            TRANSFORM         - pure: data in, data out
-├── load.py                 LOAD              - the only part that writes
+├── load.py                 LOAD              - writes to DuckDB
+├── load_print.py           LOAD (console)    - the earlier print-only loader
+├── analytics_schema.sql    DDL for the analytical store
 ├── pipeline.py             the fourth module - wiring only
 ├── fixtures/               three canned API responses, one corrupted
 └── tests/                  pytest over the transform
@@ -22,16 +24,19 @@ ETL_Analysis/
 From the **repository root**, not from inside this folder:
 
 ```bash
-python -m ETL_Analysis.pipeline                       # all three symbols
+pip install duckdb
+
+python -m ETL_Analysis.pipeline                       # all three -> warehouse.duckdb
+python -m ETL_Analysis.pipeline --db my.duckdb        # a different store
+python -m ETL_Analysis.pipeline --print               # console instead of DuckDB
 python -m ETL_Analysis.pipeline --symbols RELIANCE.NS # one symbol
-python -m ETL_Analysis.pipeline --rows 5              # cap printed rows
 python -m ETL_Analysis.pipeline --strict              # quarantine everything
 python -m ETL_Analysis.pipeline -v                    # verbose logging
 python -m ETL_Analysis.pipeline --live                # once a real key exists
 ```
 
-No third-party dependencies for the offline path: standard library only.
-`extract_live.py` needs `requests`.
+`duckdb` is the only dependency for the default path, and `--print` needs none
+at all. `extract_live.py` needs `requests`.
 
 Tests, also from the repository root:
 
@@ -129,18 +134,75 @@ in the test suite. A dropped row is invisible, and a chart drawn over silently
 dropped rows is wrong in a way nobody can see. Quarantined rows keep the
 original candle attached so a teammate can see exactly what arrived.
 
-## Load
+## Load: the analytical store
 
-Prints to stdout for now. Nothing imports `duckdb`: the print target keeps the
-pipeline runnable with no analytical store provisioned. Swapping the destination
-is a change to `load.py` only — extract and transform do not know where the data
-lands, which is the point of the split.
+DuckDB, one file on disk. Three tables, defined in `analytics_schema.sql`:
 
-**On the eventual DuckDB target:** `fact_trades` in
-`contracts/analytics-schema.sql` is one row per *order*, keyed on account, side
-and status. Candles have no account and no side, so they do **not** belong in
-that fact table. Market candles want their own table; `fact_trades` is loaded in
-Sprint 7 when the source becomes the platform's own order flow.
+| Table | Grain | Holds |
+|---|---|---|
+| `daily_price` | one row per symbol per trading day | the analysis rows: cleaned, typed, with derived measures |
+| `quarantined_candle` | one row per rejected candle | the dead-letter table, original payload attached |
+| `load_run` | one row per symbol per run | the ledger: counts, dates, whether repair was on |
+
+### Why candles are not in FACT_TRADES
+
+`contracts/analytics-schema.sql` is binding, and its `FACT_TRADES` is **one row
+per order** — it carries `account_key`, `side`, `status` and `quantity`. A
+market candle has none of those: there is no account behind an end-of-day price
+and no BUY/SELL on a daily bar. Loading candles into `FACT_TRADES` would corrupt
+the grain the contract states and break the Sprint 7 load.
+
+So candles get their own table and the contract's tables are left untouched.
+These are **additions, not changes** — nothing is renamed or altered, so no
+consumer breaks. `contracts/README.md` says a divergence must be raised rather
+than built quietly; this is the raising of it, and it is a decision to defend at
+the review.
+
+`dim_date`, `dim_instrument`, `dim_account` and `fact_trades` are loaded in
+Sprint 7, when the source becomes the platform's own order flow. `daily_price`
+already carries `date_key` in `YYYYMMDD` form and an `exchange` derived by the
+rule the contract states, so it can join to `dim_date` and `dim_instrument`
+the moment they exist.
+
+### Idempotency
+
+The contract requires re-running a load not to double-count. `daily_price` is
+merged on its natural key `(symbol, trade_date)`: the loader deletes exactly the
+dates it is about to write, then inserts. Deleting by date rather than by symbol
+means a narrow re-pull does not destroy history from a wider one.
+`quarantined_candle` is replaced per symbol. `load_run` is append-only, because
+the ledger is the history of loads rather than the current state.
+
+### Reconciliation
+
+`candles_in = rows_kept + rows_quarantined` is an invariant, checked in SQL
+after every run and reported by the pipeline. A non-empty result means a row was
+lost between arriving and landing — the failure this whole design exists to make
+visible.
+
+### Accesing DuckDb
+
+run 
+pip install duckdb
+winget install duckdb.cli
+duckdb -ui warehouse.duckdb
+
+## Testing
+
+```bash
+pip install pytest
+pytest ETL_Analysis/tests -v
+```
+
+65 tests. `test_load.py` runs the **real** DDL and the **real** SQL statements
+against an in-memory SQLite mirror — DuckDB and SQLite share the `?` placeholder
+style and accept the same ANSI DDL here, so statement correctness, column-order
+alignment and delete-then-insert idempotency are all covered without requiring
+`duckdb` to be installed to run the suite.
+
+What that does **not** prove: DuckDB-specific type behaviour (`DECIMAL`
+precision, `TIMESTAMP` handling) and the `duckdb.connect` call itself. Run the
+pipeline against a real DuckDB file once and check a few rows to close that gap.
 
 ## Still to do
 
