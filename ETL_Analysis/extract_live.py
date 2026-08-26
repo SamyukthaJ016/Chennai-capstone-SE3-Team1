@@ -47,7 +47,7 @@ except ImportError:  # pragma: no cover - requests is a sprint dependency
 
 BASE_URL = "https://y4t9nq2bqf.execute-api.eu-west-2.amazonaws.com/v1"
 CACHE_DIR = Path(__file__).parent / ".cache"
-KEY_ENV_VAR = "fnx_dev_52KrPRXdxfUlavsuPCwEr7IOrb4QPUY"
+KEY_ENV_VAR = "FAUXNANCE_API_KEY"
 
 MAX_RETRIES = 3
 BACKOFF_BASE_SECONDS = 1.0
