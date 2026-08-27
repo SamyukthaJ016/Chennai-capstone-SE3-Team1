@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "BACKFILL_IN_PROGRESS",
+    "message": "Historical data is being prepared; retry later.",
+    "details": {}
+  }
+}
