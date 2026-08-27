@@ -65,6 +65,10 @@ BASE_LAYOUT = {
 
 PLOTLY_CONFIG = {"displaylogo": False, "responsive": True}
 
+# Calendar quarters, independent of year -- a report typically covers a
+# single year or less, so "Q1" unambiguously means Jan-Mar within it.
+QUARTER_LABELS = ("Q1", "Q2", "Q3", "Q4")
+
 
 class PlotlyMissing(ImportError):
     """plotly is not installed. The report cannot be rendered without it."""
@@ -109,6 +113,51 @@ def _axis(title: str, **extra) -> dict:
             "linecolor": "#5b6470", "zeroline": False}
     axis.update(extra)
     return axis
+
+
+# ---------------------------------------------------------------------------
+# Quarterly segmentation, shared by the per-symbol time series figures.
+# ---------------------------------------------------------------------------
+
+def _quarter_of(day: date) -> int:
+    """Calendar quarter (1-4) a date falls in."""
+    return (day.month - 1) // 3 + 1
+
+
+def _split_by_quarter(rows: list[dict]) -> list[list[dict]]:
+    """Rows grouped into Q1..Q4 buckets, each kept in date order.
+
+    Always returns four buckets, even when a quarter has no rows, so the
+    trace built from bucket `i` always lands at index `i` -- which is what
+    lets `_quarter_updatemenu` address traces by a fixed position rather
+    than a value that would shift with the data.
+    """
+    buckets: list[list[dict]] = [[], [], [], []]
+    for row in rows:
+        buckets[_quarter_of(row["date"]) - 1].append(row)
+    return buckets
+
+
+def _quarter_updatemenu() -> dict:
+    """Buttons that isolate one quarter's trace, or show all four.
+
+    Client-side only (plotly's `restyle` runs in the browser), so this works
+    in the offline, no-backend HTML file the report already is. Assumes the
+    figure's traces are exactly [Q1, Q2, Q3, Q4] in that order.
+    """
+    buttons = [{
+        "label": "All quarters", "method": "restyle",
+        "args": [{"visible": [True, True, True, True]}],
+    }]
+    for index, label in enumerate(QUARTER_LABELS):
+        visible = [i == index for i in range(4)]
+        buttons.append({"label": label, "method": "restyle",
+                        "args": [{"visible": visible}]})
+    return {
+        "type": "buttons", "direction": "left", "buttons": buttons,
+        "x": 0, "xanchor": "left", "y": 1.24, "yanchor": "top",
+        "showactive": True, "pad": {"r": 6, "t": 4},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +262,12 @@ def quality_figure(results: list[dict]) -> dict | None:
 
 
 def close_figure(result: dict) -> dict | None:
-    """One symbol's closing price, with a title that states the finding."""
+    """One symbol's closing price, with a title that states the finding.
+
+    Split into one trace per calendar quarter (always Q1..Q4, in that
+    order) so the buttons above the chart can isolate a single quarter or
+    show all of them -- see `_quarter_updatemenu`.
+    """
     rows = result["rows"]
     if not rows:
         return None
@@ -222,25 +276,29 @@ def close_figure(result: dict) -> dict | None:
     direction = "rose" if s["period_return_pct"] >= 0 else "fell"
     currency = s.get("currency") or result.get("currency") or "currency"
 
-    trace = {
-        "type": "scatter",
-        "mode": "lines+markers",
-        "name": symbol,
-        "x": [r["date"].isoformat() for r in rows],
-        "y": [r["close"] for r in rows],
-        "line": {"color": SERIES_COLOURS[0], "width": 2.5},
-        "marker": {
-            # Repaired rows are drawn as open diamonds so a reader can see at a
-            # glance which points were corrected rather than observed.
-            "size": [9 if r["repaired"] else 6 for r in rows],
-            "symbol": ["diamond-open" if r["repaired"] else "circle"
-                       for r in rows],
-            "color": [COLOUR_REPAIRED if r["repaired"] else SERIES_COLOURS[0]
-                      for r in rows],
-        },
-        "hovertemplate": f"%{{y:,.2f}} {currency} on %{{x|%d %b %Y}}"
-                         f"<extra>{symbol}</extra>",
-    }
+    traces = []
+    for index, quarter_rows in enumerate(_split_by_quarter(rows)):
+        colour = SERIES_COLOURS[index % len(SERIES_COLOURS)]
+        traces.append({
+            "type": "scatter",
+            "mode": "lines+markers",
+            "name": QUARTER_LABELS[index],
+            "x": [r["date"].isoformat() for r in quarter_rows],
+            "y": [r["close"] for r in quarter_rows],
+            "line": {"color": colour, "width": 2.5},
+            "marker": {
+                # Repaired rows are drawn as open diamonds so a reader can
+                # see at a glance which points were corrected rather than
+                # observed.
+                "size": [9 if r["repaired"] else 6 for r in quarter_rows],
+                "symbol": ["diamond-open" if r["repaired"] else "circle"
+                           for r in quarter_rows],
+                "color": [COLOUR_REPAIRED if r["repaired"] else colour
+                          for r in quarter_rows],
+            },
+            "hovertemplate": f"%{{y:,.2f}} {currency} on %{{x|%d %b %Y}}"
+                             f"<extra>{symbol} {QUARTER_LABELS[index]}</extra>",
+        })
 
     layout = dict(BASE_LAYOUT)
     layout.update({
@@ -249,10 +307,13 @@ def close_figure(result: dict) -> dict | None:
                           f"{s['date_from']:%d %b} and {s['date_to']:%d %b %Y}"},
         "xaxis": _axis("Trading day", type="date"),
         "yaxis": _axis(f"Closing price ({currency})"),
-        "showlegend": False,
+        "showlegend": True,
+        "legend": {"orientation": "h", "y": -0.22},
+        "updatemenus": [_quarter_updatemenu()],
+        "margin": {**BASE_LAYOUT["margin"], "t": 92},
         "height": 380,
     })
-    return {"data": [trace], "layout": layout}
+    return {"data": traces, "layout": layout}
 
 
 def volume_figure(result: dict) -> dict | None:
@@ -261,28 +322,36 @@ def volume_figure(result: dict) -> dict | None:
     A day with no reported volume is passed to plotly as null, which leaves a
     gap rather than drawing a zero bar. A missing figure is not a day without
     trading, and a zero bar would say it was.
+
+    Split into one trace per calendar quarter, same as `close_figure`, so
+    the same quarter buttons isolate a single quarter here too.
     """
     rows = result["rows"]
     if not rows:
         return None
     symbol = result["summary"]["symbol"]
 
-    trace = {
-        "type": "bar",
-        "name": "Shares traded",
-        "x": [r["date"].isoformat() for r in rows],
-        "y": [r["volume"] for r in rows],
-        "marker": {"color": SERIES_COLOURS[1]},
-        "hovertemplate": "%{y:,.0f} shares on %{x|%d %b %Y}"
-                         f"<extra>{symbol}</extra>",
-    }
+    traces = []
+    for index, quarter_rows in enumerate(_split_by_quarter(rows)):
+        traces.append({
+            "type": "bar",
+            "name": QUARTER_LABELS[index],
+            "x": [r["date"].isoformat() for r in quarter_rows],
+            "y": [r["volume"] for r in quarter_rows],
+            "marker": {"color": SERIES_COLOURS[index % len(SERIES_COLOURS)]},
+            "hovertemplate": "%{y:,.0f} shares on %{x|%d %b %Y}"
+                             f"<extra>{symbol} {QUARTER_LABELS[index]}</extra>",
+        })
 
     layout = dict(BASE_LAYOUT)
     layout.update({
         "title": {"text": f"Shares traded each day in {symbol}"},
         "xaxis": _axis("Trading day", type="date"),
         "yaxis": _axis("Shares traded", rangemode="tozero"),
-        "showlegend": False,
+        "showlegend": True,
+        "legend": {"orientation": "h", "y": -0.22},
+        "updatemenus": [_quarter_updatemenu()],
+        "margin": {**BASE_LAYOUT["margin"], "t": 92},
         "height": 340,
     })
 
@@ -292,10 +361,10 @@ def volume_figure(result: dict) -> dict | None:
             "text": f"{len(missing)} day(s) with no volume reported are left "
                     f"blank, not drawn as zero",
             "showarrow": False, "xref": "paper", "yref": "paper",
-            "x": 0, "y": 1.08, "xanchor": "left",
+            "x": 0, "y": 1.12, "xanchor": "left",
             "font": {"size": 11, "color": "#5b6470"},
         }]
-    return {"data": [trace], "layout": layout}
+    return {"data": traces, "layout": layout}
 
 
 # ---------------------------------------------------------------------------
