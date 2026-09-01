@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.team1.trading</groupId>
+    <artifactId>domain-engine</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>Trading Domain Engine</name>
+    <description>Sprint 5 - framework-free trading domain module (accounts, instruments, orders, positions)</description>
+
+    <properties>
+        <maven.compiler.release>21</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+        <junit.version>5.10.2</junit.version>
+        <jakarta.validation.version>3.0.2</jakarta.validation.version>
+        <hibernate.validator.version>8.0.1.Final</hibernate.validator.version>
+        <jakarta.el.version>4.0.2</jakarta.el.version>
+
+        <maven.compiler.plugin.version>3.13.0</maven.compiler.plugin.version>
+        <maven.surefire.plugin.version>3.2.5</maven.surefire.plugin.version>
+        <maven.enforcer.plugin.version>3.4.1</maven.enforcer.plugin.version>
+    </properties>
+
+    <dependencies>
+        <!-- The ONLY non-test dependency the domain is allowed. Bean Validation
+             annotations are declarations, not behaviour, so they're permitted
+             inside the domain package. -->
+        <dependency>
+            <groupId>jakarta.validation</groupId>
+            <artifactId>jakarta.validation-api</artifactId>
+            <version>${jakarta.validation.version}</version>
+        </dependency>
+        <!-- Test-only: JUnit 5 -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Test-only: a validator IMPLEMENTATION to actually run the Bean
+             Validation annotations in tests. hibernate-validator here does
+             not violate criterion 5 because it never leaves test scope and
+             so never reaches the compiled main artifact's dependency tree. -->
+        <dependency>
+            <groupId>org.hibernate.validator</groupId>
+            <artifactId>hibernate-validator</artifactId>
+            <version>${hibernate.validator.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.glassfish</groupId>
+            <artifactId>jakarta.el</artifactId>
+            <version>${jakarta.el.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>${maven.compiler.plugin.version}</version>
+            </plugin>
+
+            <!-- JUnit 5 support for `mvn test`, reports land in
+                 target/surefire-reports/ -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>${maven.surefire.plugin.version}</version>
+            </plugin>
+
+            <!-- Fails the build the moment Spring, a servlet API, a JDBC
+                 driver, MyBatis or a connection pool reaches the dependency
+                 tree - including transitively. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>${maven.enforcer.plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>enforce-banned-dependencies</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <bannedDependencies>
+                                    <excludes>
+                                        <!-- Spring, in any flavour -->
+                                        <exclude>org.springframework</exclude>
+                                        <exclude>org.springframework.boot</exclude>
+                                        <!-- Servlet APIs -->
+                                        <exclude>javax.servlet</exclude>
+                                        <exclude>jakarta.servlet</exclude>
+                                        <!-- MyBatis -->
+                                        <exclude>org.mybatis</exclude>
+                                        <!-- JDBC drivers -->
+                                        <exclude>org.postgresql</exclude>
+                                        <exclude>mysql</exclude>
+                                        <exclude>com.mysql</exclude>
+                                        <exclude>com.h2database</exclude>
+                                        <exclude>org.mariadb.jdbc</exclude>
+                                        <exclude>com.microsoft.sqlserver</exclude>
+                                        <exclude>com.oracle.database.jdbc</exclude>
+                                        <!-- Connection pools -->
+                                        <exclude>com.zaxxer</exclude>
+                                        <exclude>org.apache.tomcat</exclude>
+                                        <exclude>org.apache.tomcat.embed</exclude>
+                                        <exclude>org.apache.commons:commons-dbcp2</exclude>
+                                    </excludes>
+                                    <message>
+                                        Banned dependency detected. The Sprint 5 domain package must stay
+                                        framework-free: no Spring, servlet API, JDBC driver, MyBatis or
+                                        connection pool - not even transitively. Remove it (or its source)
+                                        before this build can pass.
+                                    </message>
+                                </bannedDependencies>
+                            </rules>
+                            <fail>true</fail>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
