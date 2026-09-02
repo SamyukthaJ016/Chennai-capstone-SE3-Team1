@@ -1,6 +1,9 @@
 package com.team1.trading.domain.entity;
 
+import com.team1.trading.domain.entity.types.AccountState;
+
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.UUID;
@@ -85,6 +88,69 @@ public class Client {
         this.name = name;
         this.email = email;
         this.phone = phone;
+    }
+
+    /** Business rule 2 asks this. Only an ACTIVE account trades. */
+    public boolean canTrade() {
+        return AccountState.ACTIVE.name().equals(accountState);
+    }
+
+    /** Lifts a suspension. The suspension is reversible. */
+    public void activate() {
+        this.accountState = AccountState.ACTIVE.name();
+    }
+
+    /** The account can still be read, it just cannot trade. */
+    public void suspend() {
+        this.accountState = AccountState.SUSPENDED.name();
+    }
+
+    public void deactivate() {
+        this.accountState = AccountState.INACTIVE.name();
+    }
+
+    /**
+     * Whether the wallet covers the amount. Business rule 6 asks this before a
+     * buy, so nothing is subtracted to find out. Exactly the balance is
+     * affordable; a penny more is not.
+     */
+    public boolean canAfford(BigDecimal amount) {
+        return walletBalance.compareTo(money(amount)) >= 0;
+    }
+
+    /** Puts money in. Zero is allowed and moves nothing. */
+    public void credit(BigDecimal amount) {
+        this.walletBalance = money(walletBalance.add(money(amount)));
+    }
+
+    /**
+     * Takes money out. A debit that would leave the balance negative is
+     * refused before anything is subtracted, rather than attempted and then
+     * inspected for a negative result.
+     */
+    public void debit(BigDecimal amount) {
+        BigDecimal value = money(amount);
+        if (walletBalance.compareTo(value) < 0) {
+            throw new IllegalStateException(
+                    "balance " + walletBalance + " cannot cover a debit of " + value);
+        }
+        this.walletBalance = money(walletBalance.subtract(value));
+    }
+
+    /**
+     * Money is decimal at two places and never a double, because binary
+     * floating point cannot represent 0.10 exactly and a balance out by a
+     * hundredth of a penny after a thousand trades is a defect an auditor
+     * finds first. An absent or negative amount is not money.
+     */
+    private static BigDecimal money(BigDecimal amount) {
+        if (amount == null) {
+            throw new IllegalArgumentException("amount must not be null");
+        }
+        if (amount.signum() < 0) {
+            throw new IllegalArgumentException("amount must not be negative: " + amount);
+        }
+        return amount.setScale(2, RoundingMode.HALF_UP);
     }
 
 }
