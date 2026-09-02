@@ -5,7 +5,7 @@ class BankAccount {
     +String name
     +String phone
     +String email
-    +BigDecimal balance
+    +BigDecimal accountBalance
     +String bankName
     +String ifscCode
     +Integer version
@@ -18,12 +18,13 @@ class BankAccount {
 
 class Client {
     +Long clientId
+    +Integer accountNumber
     +String name
     +String email
     +String phone
     +LocalDateTime createdOn
-    +String state
-
+    +String accountState
+    +Integer walletBalance
     +placeOrder(order)
     +getPortfolio()
     +updateProfile()
@@ -44,13 +45,15 @@ class Order {
     +Long orderId
     +Long clientId
     +Long instrumentId
-    +String type
-    +String transactionType
+    +Enum orderType
+    +Enum transactionType
     +Integer quantity
-    +BigDecimal pricePerUnit
+    +Boolean Scheduled
+    
     +String exchange
     +String status
     +LocalDateTime orderTimestamp
+    +String idempotencyKey
 
     +validateOrder()
     +execute()
@@ -74,13 +77,16 @@ class PortfolioHolding {
     +Long clientId
     +Long instrumentId
     +Integer quantity
-    +BigDecimal avgPrice
+
+    +BigDecimal pricePerUnit
     +LocalDateTime createdAt
     +LocalDateTime updatedAt
+    +BigDecimal pnlPrice
 
     +incrementQuantity(qty)
     +decrementQuantity(qty)
     +calculateHoldingValue(marketPrice)
+    +calculatePnL(currentPrice)
 }
 
 class PortfolioPosition {
@@ -88,6 +94,7 @@ class PortfolioPosition {
     +Long clientId
     +Long instrumentId
     +Integer quantity
+    +BigDecimal pricePerUnit
     +BigDecimal pnlPrice
     +LocalDateTime createdAt
     +LocalDateTime updatedAt
@@ -99,7 +106,8 @@ class PortfolioPosition {
 class TransactionSuccess {
     +Long transactionId
     +Long orderId
-    +BigDecimal value
+    +BigDecimal quantity
+    +BigDecimal pricePerUnit
     +LocalDateTime transactionTimestamp
 
     +settle()
@@ -121,6 +129,7 @@ class TransactionFailure {
 class InProgress {
     +Long progressId
     +Long orderId
+    +Boolean Scheduled
     +Long instrumentId
     +Integer quantity
     +LocalDateTime enteredTimestamp
