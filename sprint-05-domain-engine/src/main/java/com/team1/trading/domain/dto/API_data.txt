@@ -1,0 +1,94 @@
+/api/v1/orders:
+    post:
+      tags: [Orders]
+      operationId: placeOrder
+      summary: Place an order
+      description: |
+        Validates the request against business rules 1 to 8 and records the order. Returns `NEW`
+        once the Trade Executor exists, or the terminal status when the service fills synchronously
+        in Sprint 6.
+
+        Retrying with the same `idempotencyKey` is not a way to poll for status. It returns
+        `ORD-409`. Poll `GET /api/v1/accounts/{id}/orders` instead.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlaceOrderRequest'
+            examples:
+              buy:
+                summary: Buy 100 shares
+                value:
+                  accountId: 1
+                  symbol: ACME
+                  side: BUY
+                  quantity: 100
+                  price: 25.50
+                  idempotencyKey: 6f2b1c2a-6a1e-4a4f-9c0d-2f7a1b3c4d5e
+      responses:
+        '200':
+          description: Order accepted and recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderResponse'
+              examples:
+                accepted:
+                  summary: Sprint 7 onwards, asynchronous execution
+                  value:
+                    orderId: ORD-6f2b1c2a-6a1e-4a4f-9c0d-2f7a1b3c4d5e
+                    status: NEW
+                    message: Order accepted
+                    symbol: ACME
+                    side: BUY
+                    quantity: 100
+                    price: 25.50
+                filled:
+                  summary: Sprint 6 only, synchronous execution
+                  value:
+                    orderId: ORD-6f2b1c2a-6a1e-4a4f-9c0d-2f7a1b3c4d5e
+                    status: FILLED
+                    message: Order executed
+                    symbol: ACME
+                    side: BUY
+                    quantity: 100
+                    price: 25.50
+        '400':
+          $ref: '#/components/responses/InsufficientFunds'
+        '401':
+          $ref: '#/components/responses/Unauthorised'
+        '403':
+          $ref: '#/components/responses/AccountNotActive'
+        '404':
+          description: The account or the instrument does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                accountMissing:
+                  value:
+                    errorCode: ACC-404
+                    message: Account not found
+                instrumentMissing:
+                  value:
+                    errorCode: INS-404
+                    message: Instrument not found
+        '409':
+          description: Insufficient holdings for a sell, or the idempotency key has been used.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                holdings:
+                  value:
+                    errorCode: ORD-409
+                    message: Insufficient holdings
+                duplicate:
+                  value:
+                    errorCode: ORD-409
+                    message: Duplicate order
+        '422':
+          $ref: '#/components/responses/InvalidInput'

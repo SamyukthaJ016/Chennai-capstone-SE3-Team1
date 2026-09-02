@@ -1,0 +1,8 @@
+{
+  "accountId": 1,
+  "symbol": "ACME",
+  "side": "BUY",
+  "quantity": 100,
+  "price": 25.50,
+  "idempotencyKey": "6f2b1c2a-..."
+}
