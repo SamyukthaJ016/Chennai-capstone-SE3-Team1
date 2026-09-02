@@ -1,62 +1,168 @@
 sequenceDiagram
+    autonumber
     actor Client
-    participant PortfolioService
-    participant OrdersService
-    participant InProgressService
-    participant TerminalStateService
-    
+    participant API as Trade REST API
+    participant Rules as OrderPlacementService
+    participant AccRepo as AccountRepository
+    participant Acc as Account
+    participant InsRepo as InstrumentRepository
+    participant Ins as Instrument
+    participant PosRepo as PositionRepository
+    participant Pos as Position
+    participant OrdRepo as OrderRepository
+    participant Ext as External Trade API
 
-    alt can place order
-        Client->>+OrdersService: Place Order
-        OrdersService->>InProgressService: Move to InProgress table
-        alt scheduled order
-            alt sufficient balance at time of execution
-                alt target price met
-                    alt all units available
-                        InProgressService->>TerminalStateService: Transaction Sucess(allot avaiable units)
-                        TerminalStateService-->>PortfolioService: Update portfolio
-                        TerminalStateService-->>Client: Update Balance
+    Client->>API: POST /api/v1/orders with PlaceOrderRequest
+    API->>Rules: place request
+    Note over API,Rules: The transport holds no rule. It maps a DomainException code onto a status and nothing else.<br/>Rules 4 and 5 are DTO constraints as well, and are checked again below,<br/>because a caller that replays an order never runs a validator.
 
-                    else partial unit available
-                        InProgressService->>TerminalStateService: move to Transaction Sucess(allot avaiable units)
-                        TerminalStateService-->>InProgressService: create new InProgress record with same OrderId
-                        TerminalStateService-->>PortfolioService: Update portfolio
-                        TerminalStateService-->>Client: Update Balance
-                        InProgressService->>InProgressService: wait for units
+    %% ------------------------------------------------------------------
+    %% RULE 1 - the account must exist - ACC-404
+    %% ------------------------------------------------------------------
+    Rules->>AccRepo: findById accountId
+    AccRepo-->>Rules: Account or empty
+
+    alt RULE 1 FAILS - no account carries that key
+        Rules->>OrdRepo: record orders row REJECTED and order_history failure_code ACC-404
+        Rules-->>API: AccountNotFoundException ACC-404
+        API-->>Client: 404 Account not found
+        Note over Rules,OrdRepo: Refused. Rules 2 to 8 are never evaluated.<br/>The attempt is still recorded, because the order table is the audit trail.
+    else RULE 1 HOLDS - the account exists
+
+        %% --------------------------------------------------------------
+        %% RULE 2 - the account must be ACTIVE - ACC-403
+        %% --------------------------------------------------------------
+        Rules->>Acc: isActive
+        Acc-->>Rules: ACTIVE or SUSPENDED or CLOSED
+
+        alt RULE 2 FAILS - the account is SUSPENDED or CLOSED
+            Rules->>OrdRepo: record orders row REJECTED and order_history failure_code ACC-403
+            Rules-->>API: AccountNotActiveException ACC-403
+            API-->>Client: 403 Account not active
+            Note over Rules,API: A suspended account holding no cash stops here with ACC-403 and never reaches rule 6.<br/>The evaluation order is part of the contract, so the first failure wins.
+        else RULE 2 HOLDS - the account is ACTIVE
+
+            %% ----------------------------------------------------------
+            %% RULE 3 - the instrument must exist and be tradable - INS-404
+            %% ----------------------------------------------------------
+            Rules->>InsRepo: findBySymbol symbol
+            InsRepo-->>Rules: Instrument or empty
+            Rules->>Ins: isTradable
+            Ins-->>Rules: tradable or delisted
+
+            alt RULE 3 FAILS - the symbol is unknown or no longer tradable
+                Rules->>OrdRepo: record orders row REJECTED and order_history failure_code INS-404
+                Rules-->>API: InstrumentNotFoundException INS-404
+                API-->>Client: 404 Instrument not found
+                Note over Rules,Ins: Delisting is a flag and never a deleted row, so a delisted instrument still resolves<br/>and is refused here. Both situations answer INS-404 and only the server log separates them.
+            else RULE 3 HOLDS - the instrument exists and is tradable
+
+                %% ------------------------------------------------------
+                %% RULE 4 - quantity greater than zero - VAL-422
+                %% ------------------------------------------------------
+                Rules->>Rules: read quantity off the request
+
+                alt RULE 4 FAILS - quantity is absent, zero or negative
+                    Rules->>OrdRepo: record orders row REJECTED and order_history failure_code VAL-422
+                    Rules-->>API: InvalidOrderException VAL-422
+                    API-->>Client: 422 Invalid input
+                else RULE 4 HOLDS - quantity is greater than zero
+
+                    %% --------------------------------------------------
+                    %% RULE 5 - price greater than zero - VAL-422
+                    %% --------------------------------------------------
+                    Rules->>Rules: read price off the request
+
+                    alt RULE 5 FAILS - price is absent, zero or negative
+                        Rules->>OrdRepo: record orders row REJECTED and order_history failure_code VAL-422
+                        Rules-->>API: InvalidOrderException VAL-422
+                        API-->>Client: 422 Invalid input
+                        Note over Rules,OrdRepo: Rules 4 and 5 are checked twice on purpose. The domain has to hold<br/>for a caller that never ran a validator, so it cannot rely on the DTO annotations.
+                    else RULE 5 HOLDS - price is greater than zero
+
+                        %% ----------------------------------------------
+                        %% RULE 6 - a BUY needs the cash - ORD-400
+                        %% ----------------------------------------------
+                        Rules->>Rules: notional is quantity multiplied by price
+                        Rules->>Acc: canAfford notional, asked only on a BUY
+                        Acc-->>Rules: true or false
+
+                        alt RULE 6 FAILS - a BUY whose cost is above the cash balance
+                            Rules->>OrdRepo: record orders row REJECTED and order_history failure_code ORD-400
+                            Rules-->>API: InsufficientFundsException ORD-400
+                            API-->>Client: 400 Insufficient funds
+                            Note over Rules,Acc: The account answers the question and nothing is subtracted to find out,<br/>so a debit that would leave the balance negative is refused before the subtraction.
+                        else RULE 6 HOLDS - a SELL, or a BUY the balance covers
+
+                            %% ------------------------------------------
+                            %% RULE 7 - a SELL needs the holding - ORD-409
+                            %% ------------------------------------------
+                            Rules->>PosRepo: find accountId and symbol, asked only on a SELL
+                            PosRepo-->>Rules: Position or empty
+                            Rules->>Pos: holds order quantity
+                            Pos-->>Rules: true or false
+
+                            alt RULE 7 FAILS - a SELL larger than the quantity held
+                                Rules->>OrdRepo: record orders row REJECTED and order_history failure_code ORD-409
+                                Rules-->>API: InsufficientHoldingsException ORD-409
+                                API-->>Client: 409 Insufficient holdings
+                                Note over Rules,Pos: No position and a position of zero mean the same thing to rule 7.<br/>A position never goes negative, because short selling is out of scope.
+                            else RULE 7 HOLDS - a BUY, or a SELL the position covers
+
+                                %% --------------------------------------
+                                %% RULE 8 - the idempotency key - ORD-409
+                                %% --------------------------------------
+                                Rules->>OrdRepo: claimIdempotencyKey key
+                                Note over Rules,OrdRepo: A claim and never a read. The authority is the unique constraint on orders.idempotency_key,<br/>because two concurrent requests carrying one key both pass a read then write check<br/>and losing that race duplicates a trade. Exactly one caller is told it won.
+                                OrdRepo-->>Rules: claimed or already taken
+
+                                alt RULE 8 FAILS - the key was already accepted
+                                    Rules-->>API: DuplicateOrderException ORD-409
+                                    API-->>Client: 409 Duplicate order
+                                    Note over Rules,OrdRepo: Nothing is written here. The key belongs to the order that already holds it,<br/>and retrying with the same key is not a way to poll for status.
+                                else RULE 8 HOLDS - this request claimed the key
+
+                                    %% ----------------------------------
+                                    %% ACCEPTED - all eight rules passed
+                                    %% ----------------------------------
+                                    Rules->>OrdRepo: insert orders row status NEW with idempotency_key and account_id
+                                    Rules->>OrdRepo: insert order_history ORDER_RECEIVED, previous_status none, new_status NEW
+                                    OrdRepo-->>Rules: order_id
+                                    Rules-->>API: Order in status NEW
+                                    API-->>Client: 200 orderId and status NEW
+                                    Note over Rules,OrdRepo: Nothing was mutated until every rule had passed, so a refusal leaves<br/>no half changed object graph. The order is recorded before anyone knows whether it will succeed.
+
+                                    %% ----------------------------------
+                                    %% EXECUTION - owned by the External Trade API
+                                    %% ----------------------------------
+                                    API->>OrdRepo: insert order_history SUBMITTED_TO_EXTERNAL with request_id
+                                    API->>Ext: place the order
+
+                                    alt the External Trade API fills it
+                                        Ext-->>API: FILLED with external_order_id and api_response
+                                        API->>OrdRepo: update orders status FILLED and external_order_id
+                                        API->>OrdRepo: insert order_history ORDER_FILLED, previous_status NEW, new_status FILLED
+                                        API->>Acc: debit on a BUY or credit on a SELL
+                                        API->>Pos: applyBuy recalculates the average, applySell leaves it alone
+                                        Note over Acc,Pos: Cash and position move together or neither moves.
+                                        API-->>Client: order FILLED
+                                    else the External Trade API refuses it
+                                        Ext-->>API: REJECTED with external_status and api_response
+                                        API->>OrdRepo: update orders status REJECTED
+                                        API->>OrdRepo: insert order_history EXTERNAL_REJECTED with failure_code and failure_reason
+                                        API-->>Client: order REJECTED
+                                    else the customer cancels before a fill
+                                        Client->>API: cancel the order
+                                        API->>OrdRepo: update orders status CANCELLED
+                                        API->>OrdRepo: insert order_history ORDER_CANCELLED, previous_status NEW, new_status CANCELLED
+                                        API-->>Client: order CANCELLED
+                                    end
+                                    Note over API,Ext: NEW is the working state and FILLED, REJECTED and CANCELLED are terminal.<br/>An order reaches exactly one of them, and a disallowed transition is refused rather than applied.<br/>There is no partial fill literal, so the External Trade API fills in full or refuses.
+                                end
+                            end
+                        end
                     end
-                else target price not met
-                    InProgressService->>InProgressService: wait for target price
                 end
-            else 
-                InProgressService->>TerminalStateService: Move to Transaction failure 
-            end
-        else not scheduled order
-            alt units available
-                InProgressService->>TerminalStateService: Transaction Sucess(allot avaiable units)
-                TerminalStateService-->>PortfolioService: Update portfolio
-                TerminalStateService-->>Client: Update Balance
-
-            else partial unit available
-                InProgressService->>TerminalStateService: move to Transaction Sucess(allot avaiable units)
-                TerminalStateService-->>InProgressService: create new InProgress record with same OrderId
-                TerminalStateService-->>PortfolioService: Update portfolio
-                TerminalStateService-->>Client: Update Balance
-                InProgressService->>InProgressService: wait for units
             end
         end
-    
-    
-    else cannot place order
-        OrdersService-->>Client: Notify failure
-    
     end
-    
-    
-     
-    
-
-
-    
-    
-    
-    

@@ -1,0 +1,146 @@
+sequenceDiagram
+    autonumber
+    actor Client
+    participant PortfolioService
+    participant OrdersService
+    participant InProgressService
+    participant TerminalStateService
+
+    Client->>PortfolioService: Place Order with PlaceOrderRequest
+    Note over Client,TerminalStateService: PortfolioService is the front door and owns the account, the cash balance and the holdings, so rules 1 to 7 are its to answer.<br/>OrdersService owns the orders and order_history tables, so rule 8 is its to answer on the unique key.<br/>The eight rules are enforced in this order and the first failure wins.
+
+    %% ------------------------------------------------------------------
+    %% RULE 1 - the account must exist - ACC-404
+    %% ------------------------------------------------------------------
+    PortfolioService->>PortfolioService: look up the account by accountId
+
+    alt RULE 1 FAILS - no account carries that key
+        PortfolioService->>OrdersService: record orders row REJECTED and order_history failure_code ACC-404
+        PortfolioService-->>Client: ACC-404 Account not found
+        Note over PortfolioService,OrdersService: Refused. Rules 2 to 8 are never evaluated.<br/>The attempt is still recorded, because the order table is the audit trail.
+    else RULE 1 HOLDS - the account exists
+
+        %% --------------------------------------------------------------
+        %% RULE 2 - the account must be ACTIVE - ACC-403
+        %% --------------------------------------------------------------
+        PortfolioService->>PortfolioService: read the account status
+
+        alt RULE 2 FAILS - the account is SUSPENDED or CLOSED
+            PortfolioService->>OrdersService: record orders row REJECTED and order_history failure_code ACC-403
+            PortfolioService-->>Client: ACC-403 Account not active
+            Note over Client,OrdersService: A suspended account holding no cash stops here with ACC-403 and never reaches rule 6.<br/>The evaluation order is part of the contract, so the first failure wins.<br/>A SUSPENDED account can be read and its suspension is reversible, a CLOSED account never trades again.
+        else RULE 2 HOLDS - the account is ACTIVE
+
+            %% ----------------------------------------------------------
+            %% RULE 3 - the instrument must exist and be tradable - INS-404
+            %% ----------------------------------------------------------
+            PortfolioService->>PortfolioService: look up the instrument by symbol and read its tradable flag
+
+            alt RULE 3 FAILS - the symbol is unknown or no longer tradable
+                PortfolioService->>OrdersService: record orders row REJECTED and order_history failure_code INS-404
+                PortfolioService-->>Client: INS-404 Instrument not found
+                Note over PortfolioService,OrdersService: Delisting is a flag and never a deleted row, so a delisted instrument still resolves and is refused here.<br/>Both situations answer INS-404 and only the server log separates them.
+            else RULE 3 HOLDS - the instrument exists and is tradable
+
+                %% ------------------------------------------------------
+                %% RULE 4 - quantity greater than zero - VAL-422
+                %% ------------------------------------------------------
+                PortfolioService->>PortfolioService: read quantity off the request
+
+                alt RULE 4 FAILS - quantity is absent, zero or negative
+                    PortfolioService->>OrdersService: record orders row REJECTED and order_history failure_code VAL-422
+                    PortfolioService-->>Client: VAL-422 Invalid input
+                else RULE 4 HOLDS - quantity is greater than zero
+
+                    %% --------------------------------------------------
+                    %% RULE 5 - price greater than zero - VAL-422
+                    %% --------------------------------------------------
+                    PortfolioService->>PortfolioService: read price off the request
+
+                    alt RULE 5 FAILS - price is absent, zero or negative
+                        PortfolioService->>OrdersService: record orders row REJECTED and order_history failure_code VAL-422
+                        PortfolioService-->>Client: VAL-422 Invalid input
+                        Note over Client,OrdersService: Rules 4 and 5 are checked twice on purpose, once as a DTO constraint and once here,<br/>because the domain has to hold for a caller that replays an order and never ran a validator.
+                    else RULE 5 HOLDS - price is greater than zero
+
+                        %% ----------------------------------------------
+                        %% RULE 6 - a BUY needs the cash - ORD-400
+                        %% ----------------------------------------------
+                        PortfolioService->>PortfolioService: notional is quantity multiplied by price, then ask the account whether it can afford it, on a BUY only
+
+                        alt RULE 6 FAILS - a BUY whose cost is above the cash balance
+                            PortfolioService->>OrdersService: record orders row REJECTED and order_history failure_code ORD-400
+                            PortfolioService-->>Client: ORD-400 Insufficient funds
+                            Note over Client,OrdersService: The account answers the question and nothing is subtracted to find out,<br/>so a debit that would leave the balance negative is refused before the subtraction.
+                        else RULE 6 HOLDS - a SELL, or a BUY the balance covers
+
+                            %% ------------------------------------------
+                            %% RULE 7 - a SELL needs the holding - ORD-409
+                            %% ------------------------------------------
+                            PortfolioService->>PortfolioService: read the held quantity for that symbol, on a SELL only
+
+                            alt RULE 7 FAILS - a SELL larger than the quantity held
+                                PortfolioService->>OrdersService: record orders row REJECTED and order_history failure_code ORD-409
+                                PortfolioService-->>Client: ORD-409 Insufficient holdings
+                                Note over Client,OrdersService: No holding and a holding of zero mean the same thing to rule 7.<br/>A position never goes negative, because short selling is out of scope.
+                            else RULE 7 HOLDS - a BUY, or a SELL the holding covers
+
+                                %% --------------------------------------
+                                %% RULE 8 - the idempotency key - ORD-409
+                                %% --------------------------------------
+                                PortfolioService->>OrdersService: create the order with its idempotency_key
+                                OrdersService->>OrdersService: claim the key against the unique constraint on orders.idempotency_key
+                                Note over OrdersService: A claim and never a read. Two concurrent requests carrying one key both pass a read then write check<br/>and losing that race duplicates a trade, so the write itself is the authority and exactly one caller is told it won.
+
+                                alt RULE 8 FAILS - the key has already been accepted
+                                    OrdersService-->>PortfolioService: ORD-409 Duplicate order
+                                    PortfolioService-->>Client: ORD-409 Duplicate order
+                                    Note over PortfolioService,OrdersService: Nothing is written here. The key belongs to the order that already holds it,<br/>and retrying with the same key is not a way to poll for status.
+                                else RULE 8 HOLDS - this request claimed the key
+
+                                    %% ----------------------------------
+                                    %% ACCEPTED - all eight rules passed
+                                    %% ----------------------------------
+                                    OrdersService->>OrdersService: insert orders row status NEW with account_id, instrument_id, side, quantity, price
+                                    OrdersService->>OrdersService: insert order_history ORDER_RECEIVED, previous_status none, new_status NEW
+                                    OrdersService-->>PortfolioService: order recorded, order_id and status NEW
+                                    PortfolioService-->>Client: Order accepted, status NEW
+                                    Note over Client,OrdersService: Nothing was mutated until every rule had passed, so a refusal leaves no half changed state.<br/>The order is recorded when it is received, before anyone knows whether it will succeed.
+
+                                    %% ----------------------------------
+                                    %% EXECUTION - the order works its way to exactly one terminal state
+                                    %% ----------------------------------
+                                    OrdersService->>InProgressService: hand over the order sitting in NEW
+                                    InProgressService->>OrdersService: insert order_history SUBMITTED_TO_EXTERNAL with request_id
+                                    InProgressService->>TerminalStateService: execute the order
+                                    TerminalStateService->>TerminalStateService: call the External Trade API and keep the raw response
+
+                                    alt the External Trade API fills it
+                                        TerminalStateService->>OrdersService: update orders status FILLED with external_order_id
+                                        TerminalStateService->>OrdersService: insert order_history ORDER_FILLED, previous_status NEW, new_status FILLED, api_response kept
+                                        TerminalStateService-->>PortfolioService: settle the fill
+                                        PortfolioService->>PortfolioService: debit on a BUY or credit on a SELL, and move the holding in the same step
+                                        Note over PortfolioService: Cash and position move together or neither moves.<br/>A buy recalculates the average cost, a sell reduces the quantity and leaves the average alone.
+                                        PortfolioService-->>Client: Order FILLED, balance and portfolio updated
+                                    else the External Trade API refuses it
+                                        TerminalStateService->>OrdersService: update orders status REJECTED
+                                        TerminalStateService->>OrdersService: insert order_history EXTERNAL_REJECTED with failure_code, failure_reason and api_response
+                                        TerminalStateService-->>PortfolioService: nothing to settle
+                                        PortfolioService-->>Client: Order REJECTED, no cash and no holding moved
+                                    else the customer cancels before a fill
+                                        Client->>PortfolioService: Cancel Order
+                                        PortfolioService->>InProgressService: stop the order before it fills
+                                        InProgressService->>TerminalStateService: cancel the order
+                                        TerminalStateService->>OrdersService: update orders status CANCELLED
+                                        TerminalStateService->>OrdersService: insert order_history ORDER_CANCELLED, previous_status NEW, new_status CANCELLED
+                                        PortfolioService-->>Client: Order CANCELLED
+                                    end
+                                    Note over Client,TerminalStateService: NEW is the working state and FILLED, REJECTED and CANCELLED are terminal.<br/>An order reaches exactly one of them and a disallowed transition is refused rather than applied.<br/>There is no partial fill literal, so the External Trade API fills in full or refuses.
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end

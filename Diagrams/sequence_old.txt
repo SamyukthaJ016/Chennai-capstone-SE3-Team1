@@ -1,0 +1,62 @@
+sequenceDiagram
+    actor Client
+    participant PortfolioService
+    participant OrdersService
+    participant InProgressService
+    participant TerminalStateService
+    
+
+    alt can place order
+        Client->>+OrdersService: Place Order
+        OrdersService->>InProgressService: Move to InProgress table
+        alt scheduled order
+            alt sufficient balance at time of execution
+                alt target price met
+                    alt all units available
+                        InProgressService->>TerminalStateService: Transaction Sucess(allot avaiable units)
+                        TerminalStateService-->>PortfolioService: Update portfolio
+                        TerminalStateService-->>Client: Update Balance
+
+                    else partial unit available
+                        InProgressService->>TerminalStateService: move to Transaction Sucess(allot avaiable units)
+                        TerminalStateService-->>InProgressService: create new InProgress record with same OrderId
+                        TerminalStateService-->>PortfolioService: Update portfolio
+                        TerminalStateService-->>Client: Update Balance
+                        InProgressService->>InProgressService: wait for units
+                    end
+                else target price not met
+                    InProgressService->>InProgressService: wait for target price
+                end
+            else 
+                InProgressService->>TerminalStateService: Move to Transaction failure 
+            end
+        else not scheduled order
+            alt units available
+                InProgressService->>TerminalStateService: Transaction Sucess(allot avaiable units)
+                TerminalStateService-->>PortfolioService: Update portfolio
+                TerminalStateService-->>Client: Update Balance
+
+            else partial unit available
+                InProgressService->>TerminalStateService: move to Transaction Sucess(allot avaiable units)
+                TerminalStateService-->>InProgressService: create new InProgress record with same OrderId
+                TerminalStateService-->>PortfolioService: Update portfolio
+                TerminalStateService-->>Client: Update Balance
+                InProgressService->>InProgressService: wait for units
+            end
+        end
+    
+    
+    else cannot place order
+        OrdersService-->>Client: Notify failure
+    
+    end
+    
+    
+     
+    
+
+
+    
+    
+    
+    
