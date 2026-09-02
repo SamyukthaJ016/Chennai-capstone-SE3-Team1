@@ -10,23 +10,26 @@ sequenceDiagram
         Client->>+Orders: Place Order
         Orders->>InProgress: Move to InProgress
         alt scheduled order
+            alt sufficient balance at time of execution
 
-            alt target price met
-                alt all units available
-                    InProgress->>TerminalState: Transaction Sucess(allot avaiable units)
-                    TerminalState-->Portfolio: Update portfolio
-                    TerminalState-->Client: Update Balance
+                alt target price met
+                    alt all units available
+                        InProgress->>TerminalState: Transaction Sucess(allot avaiable units)
+                        TerminalState-->Portfolio: Update portfolio
+                        TerminalState-->Client: Update Balance
 
-                else partial unit available
-                    InProgress->>TerminalState: move to Transaction Sucess(allot avaiable units)
-                    TerminalState-->InProgress: create new InProgress record with same OrderId
-                    TerminalState-->Portfolio: Update portfolio
-                    TerminalState-->Client: Update Balance
-                    InProgress->>InProgress: wait for units
+                    else partial unit available
+                        InProgress->>TerminalState: move to Transaction Sucess(allot avaiable units)
+                        TerminalState-->InProgress: create new InProgress record with same OrderId
+                        TerminalState-->Portfolio: Update portfolio
+                        TerminalState-->Client: Update Balance
+                        InProgress->>InProgress: wait for units
+                    end
+                else target price not met
+                    InProgress->>InProgress: wait for target price
                 end
-            else target price not met
-                InProgress->>InProgress: wait for target price
-            end
+            else 
+                InProgress->>TerminalState: Move to Transaction failure 
 
 
 
