@@ -1,0 +1,37 @@
+sequenceDiagram
+    actor Client
+    participant OrdersService
+    participant InProgressService
+    participant TerminalStateService
+    participant PortfolioService
+
+    Note over InProgressService: Scheduled order reaches execution time
+
+    InProgressService->>InProgressService: Evaluate scheduled order
+
+    alt Insufficient balance
+        InProgressService->>TerminalStateService: Mark Transaction Failed
+        TerminalStateService-->>Client: Notify transaction failure
+
+    else Sufficient balance
+        InProgressService->>InProgressService: Check target price
+
+        alt Target price not met
+            InProgressService->>InProgressService: Keep order InProgress
+
+        else Target price met
+            InProgressService->>InProgressService: Check unit availability
+
+            alt All units available
+                InProgressService->>TerminalStateService: Transaction Success
+                TerminalStateService-->>PortfolioService: Update portfolio
+                TerminalStateService-->>Client: Update balance
+
+            else Partial units available
+                InProgressService->>TerminalStateService: Transaction Success<br/>Available units allotted
+                TerminalStateService-->>PortfolioService: Update portfolio
+                TerminalStateService-->>Client: Update balance
+                TerminalStateService-->>InProgressService: Create InProgress record<br/>for remaining units
+            end
+        end
+    end

@@ -1,0 +1,39 @@
+sequenceDiagram
+    actor Client
+    participant PortfolioService
+    participant OrdersService
+    participant InProgressService
+    participant TerminalStateService
+
+    Client->>PortfolioService: Place Order
+
+    alt Buy Order
+        PortfolioService->>PortfolioService: Validate Buy Order
+
+        alt Order can be placed
+            PortfolioService->>OrdersService: Create Buy Order
+            OrdersService->>InProgressService: Create InProgress record
+            InProgressService->>TerminalStateService: Process Transaction
+            TerminalStateService-->>InProgressService: Transaction Success
+            InProgressService-->>OrdersService: Order Completed
+            OrdersService-->>Client: Buy Order Successful
+
+        else Order cannot be placed
+            PortfolioService-->>Client: Notify order cannot be placed
+        end
+
+    else Sell Order
+        PortfolioService->>PortfolioService: Check holdings
+
+        alt Sufficient holdings
+            PortfolioService->>OrdersService: Create Sell Order
+            OrdersService->>InProgressService: Create InProgress record
+            InProgressService->>TerminalStateService: Process Transaction
+            TerminalStateService-->>InProgressService: Transaction Success
+            InProgressService-->>OrdersService: Order Completed
+            OrdersService-->>Client: Sell Order Successful
+
+        else Insufficient holdings
+            PortfolioService-->>Client: Notify insufficient holdings
+        end
+    end

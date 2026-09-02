@@ -1,0 +1,25 @@
+sequenceDiagram
+    actor Client
+    participant OrdersService
+    participant InProgressService
+    participant TerminalStateService
+    participant PortfolioService
+
+    Note over Client,PortfolioService: Non-Scheduled Order
+
+    Client->>OrdersService: Place Order
+    OrdersService->>InProgressService: Create InProgress record
+
+    InProgressService->>InProgressService: Check unit availability
+
+    alt All units available
+        InProgressService->>TerminalStateService: Transaction Success
+        TerminalStateService-->>PortfolioService: Update portfolio
+        TerminalStateService-->>Client: Update balance
+
+    else Partial units available
+        InProgressService->>TerminalStateService: Transaction Success<br/>for available units
+        TerminalStateService-->>PortfolioService: Update portfolio
+        TerminalStateService-->>Client: Update balance
+        TerminalStateService-->>InProgressService: Create InProgress record<br/>for remaining units
+    end
