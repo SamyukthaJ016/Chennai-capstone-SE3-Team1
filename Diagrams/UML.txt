@@ -1,0 +1,145 @@
+classDiagram
+
+class BankAccount {
+    +String accountNumber
+    +String name
+    +String phone
+    +String email
+    +BigDecimal balance
+    +String bankName
+    +String ifscCode
+    +Integer version
+
+    +deposit(amount)
+    +withdraw(amount)
+    +getBalance()
+    +updateContact(phone, email)
+}
+
+class Client {
+    +Long clientId
+    +String name
+    +String email
+    +String phone
+    +LocalDateTime createdOn
+    +String state
+
+    +placeOrder(order)
+    +getPortfolio()
+    +updateProfile()
+}
+
+class Auth {
+    +String email
+    +String password
+    +LocalDateTime created
+    +LocalDateTime updated
+
+    +authenticate(password)
+    +changePassword(password)
+    +resetPassword()
+}
+
+class Order {
+    +Long orderId
+    +Long clientId
+    +Long instrumentId
+    +String type
+    +String transactionType
+    +Integer quantity
+    +BigDecimal pricePerUnit
+    +String exchange
+    +String status
+    +LocalDateTime orderTimestamp
+
+    +validateOrder()
+    +execute()
+    +cancel()
+    +calculateAmount()
+}
+
+class Instrument {
+    +Long instrumentId
+    +String instrumentName
+    +Boolean active
+    +LocalDateTime deletedOn
+
+    +activate()
+    +deactivate()
+    +isTradable()
+}
+
+class PortfolioHolding {
+    +Long holdingId
+    +Long clientId
+    +Long instrumentId
+    +Integer quantity
+    +BigDecimal avgPrice
+    +LocalDateTime createdAt
+    +LocalDateTime updatedAt
+
+    +incrementQuantity(qty)
+    +decrementQuantity(qty)
+    +calculateHoldingValue(marketPrice)
+}
+
+class PortfolioPosition {
+    +Long positionId
+    +Long clientId
+    +Long instrumentId
+    +Integer quantity
+    +BigDecimal pnlPrice
+    +LocalDateTime createdAt
+    +LocalDateTime updatedAt
+
+    +calculatePnL(currentPrice)
+    +updatePosition()
+}
+
+class TransactionSuccess {
+    +Long transactionId
+    +Long orderId
+    +BigDecimal value
+    +LocalDateTime transactionTimestamp
+
+    +settle()
+    +generateReceipt()
+}
+
+class TransactionFailure {
+    +Long transactionId
+    +Long orderId
+    +String errorId
+    +BigDecimal value
+    +String reasonForFailure
+    +LocalDateTime transactionTimestamp
+
+    +retry()
+    +logFailure()
+}
+
+class InProgress {
+    +Long progressId
+    +Long orderId
+    +Long instrumentId
+    +Integer quantity
+    +LocalDateTime enteredTimestamp
+
+    +markCompleted()
+    +markFailed()
+}
+
+Client "1" --> "1" Auth : authenticates
+Client "1" --> "1" BankAccount : owns
+Client "1" --> "*" Order : places
+
+Order "*" --> "1" Instrument : trades
+
+Client "1" --> "*" PortfolioHolding : owns
+Client "1" --> "*" PortfolioPosition : owns
+
+PortfolioHolding "*" --> "1" Instrument
+PortfolioPosition "*" --> "1" Instrument
+
+Order "1" --> "0..1" TransactionSuccess
+Order "1" --> "0..1" TransactionFailure
