@@ -5,30 +5,36 @@ import java.time.LocalDateTime;
 /**
  * A tradable instrument. active/deactivate toggles whether it's currently
  * tradable;
+ *
+ * The symbol is the key. orders.instrument_id is VARCHAR(50) and holds the
+ * symbol itself, which is also what PlaceOrderRequest.symbol carries, so one
+ * instrument has one identity from the request through to the order row.
  */
 public class Instrument {
 
-    private Long instrumentId;
+    private String instrumentId;
     private String instrumentName;
     private boolean active;
     private LocalDateTime updatedOn;
 
-    /** For a new instrument not yet persisted - no id assigned. */
-    public Instrument(String instrumentName) {
+    /** For a new instrument not yet persisted. */
+    public Instrument(String instrumentId, String instrumentName) {
+        this.instrumentId = instrumentId;
         this.instrumentName = instrumentName;
         this.active = true;
         this.updatedOn = null;
     }
 
     /** For reconstructing an instrument already in storage. */
-    public Instrument(Long instrumentId, String instrumentName, boolean active, LocalDateTime deletedOn) {
+    public Instrument(String instrumentId, String instrumentName, boolean active, LocalDateTime deletedOn) {
         this.instrumentId = instrumentId;
         this.instrumentName = instrumentName;
         this.active = active;
         this.updatedOn = deletedOn;
     }
 
-    public Long getInstrumentId() {
+    /** The symbol, as it appears on every order. */
+    public String getInstrumentId() {
         return instrumentId;
     }
 

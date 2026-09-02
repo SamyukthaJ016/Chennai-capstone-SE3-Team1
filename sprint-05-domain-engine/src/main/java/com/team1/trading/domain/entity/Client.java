@@ -8,6 +8,7 @@ import java.util.UUID;
 public class Client {
 
     private final UUID clientId;
+    private Long userId;
     private Integer accountNumber;
     private String name;
     private String email;
@@ -17,8 +18,9 @@ public class Client {
     private BigDecimal walletBalance;
 
     /** For a brand-new client - generates its own identifier. */
-    public Client(Integer accountNumber, String name, String email, String phone) {
+    public Client(Long userId, Integer accountNumber, String name, String email, String phone) {
         this.clientId = UUID.randomUUID();
+        this.userId = userId;
         this.accountNumber = Objects.requireNonNull(accountNumber, "accountNumber must not be null");
         this.name = name;
         this.email = email;
@@ -29,9 +31,10 @@ public class Client {
     }
 
     /** For reconstructing a client already in storage, with its existing id. */
-    public Client(UUID clientId, Integer accountNumber, String name, String email, String phone,
+    public Client(UUID clientId, Long userId, Integer accountNumber, String name, String email, String phone,
                   LocalDateTime createdOn, String accountState, BigDecimal walletBalance) {
         this.clientId = Objects.requireNonNull(clientId, "clientId must not be null");
+        this.userId = userId;
         this.accountNumber = Objects.requireNonNull(accountNumber, "accountNumber must not be null");
         this.name = name;
         this.email = email;
@@ -43,6 +46,11 @@ public class Client {
 
     public UUID getClientId() {
         return clientId;
+    }
+
+    /** The numeric key orders.user_id references. */
+    public Long getUserId() {
+        return userId;
     }
 
     public Integer getAccountNumber() {

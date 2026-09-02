@@ -6,7 +6,7 @@ import java.util.UUID;
 
 public class PortfolioHolding extends PortfolioEntry {
 
-    public PortfolioHolding(Long holdingId, UUID clientId, Long instrumentId, int quantity, BigDecimal pricePerUnit) {
+    public PortfolioHolding(Long holdingId, UUID clientId, String instrumentId, int quantity, BigDecimal pricePerUnit) {
         super(holdingId, clientId, instrumentId, quantity, pricePerUnit);
     }
 

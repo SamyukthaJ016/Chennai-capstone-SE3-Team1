@@ -15,7 +15,7 @@ public abstract class PortfolioEntry {
 
     private final Long id;
     private final UUID clientId;
-    private final Long instrumentId;
+    private final String instrumentId;
     private int quantity;
     private BigDecimal pricePerUnit;
     private BigDecimal overallGains;
@@ -23,7 +23,7 @@ public abstract class PortfolioEntry {
     private LocalDateTime updatedAt;
 
 
-    protected PortfolioEntry(Long id, UUID clientId, Long instrumentId, int quantity, BigDecimal pricePerUnit) {
+    protected PortfolioEntry(Long id, UUID clientId, String instrumentId, int quantity, BigDecimal pricePerUnit) {
         this.id = id;
         this.clientId = Objects.requireNonNull(clientId, "clientId must not be null");
         this.instrumentId = Objects.requireNonNull(instrumentId, "instrumentId must not be null");
@@ -41,7 +41,7 @@ public abstract class PortfolioEntry {
         return clientId;
     }
 
-    public Long getInstrumentId() {
+    public String getInstrumentId() {
         return instrumentId;
     }
 
