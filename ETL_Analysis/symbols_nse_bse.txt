@@ -1,33 +1,4 @@
-# Indian equity symbol universe: NSE (.NS) and BSE (.BO)
-#
-# Format: one symbol per line. Blank lines and #-comments are ignored, and
-# anything after a # on a line is a comment too, so a company name can sit
-# beside its ticker.
-#
-# PROVENANCE, AND WHAT THIS LIST IS NOT
-#
-# These are real, listed Indian companies in the Fauxnance symbol scheme
-# (.NS = NSE, .BO = BSE), drawn from the large- and mid-cap names an Indian
-# equity universe would normally cover. They are NOT a verified list of what
-# Fauxnance actually serves: the API documents no catalogue endpoint, so
-# nothing here has been confirmed against it.
-#
-# Run this before trusting the list:
-#
-#     python -m ETL_Analysis.pipeline --live --validate-symbols
-#
-# That pulls each symbol once, records which ones resolve, and writes the
-# verified set to .cache/symbols.json. Later runs use the verified set, so a
-# symbol Fauxnance does not serve costs you one request, once, and is then
-# skipped rather than failing every run.
-#
-# Index membership changes and companies get renamed, delisted or merged. If a
-# symbol here has gone, validation will drop it. Edit this file freely: it is
-# a starting universe, not a fixed one.
 
-# ---------------------------------------------------------------------------
-# NSE — large cap
-# ---------------------------------------------------------------------------
 RELIANCE.NS          # Reliance Industries
 TCS.NS               # Tata Consultancy Services
 HDFCBANK.NS          # HDFC Bank

@@ -1,7 +1,27 @@
 {
-  "error": {
-    "code": "BACKFILL_IN_PROGRESS",
-    "message": "Historical data is being prepared; retry later.",
-    "details": {}
+  "data": {
+    "symbol": "HINDUNILVR.BO",
+    "interval": "1d",
+    "currency": "INR",
+    "candles": [
+      {
+        "date": "2026-08-27",
+        "open": 2020,
+        "high": 2027,
+        "low": 2005.300048828125,
+        "close": 2006.5999755859375,
+        "adjclose": 2006.5999755859375,
+        "volume": 20404,
+        "synthetic": false
+      }
+    ]
+  },
+  "meta": {
+    "asOf": "2026-08-27T00:00:00Z",
+    "disclaimer": "Educational data. Not for investment use.",
+    "symbol": "HINDUNILVR.BO",
+    "source": "stored",
+    "partial": true,
+    "availableFrom": "2026-08-27"
   }
 }

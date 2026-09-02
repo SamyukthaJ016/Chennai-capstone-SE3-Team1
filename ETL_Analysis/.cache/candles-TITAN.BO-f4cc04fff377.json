@@ -1,7 +1,27 @@
 {
-  "error": {
-    "code": "BACKFILL_IN_PROGRESS",
-    "message": "Historical data is being prepared; retry later.",
-    "details": {}
+  "data": {
+    "symbol": "TITAN.BO",
+    "interval": "1d",
+    "currency": "INR",
+    "candles": [
+      {
+        "date": "2026-08-27",
+        "open": 5096.39990234375,
+        "high": 5115.10009765625,
+        "low": 5071.25,
+        "close": 5093.39990234375,
+        "adjclose": 5093.39990234375,
+        "volume": 9717,
+        "synthetic": false
+      }
+    ]
+  },
+  "meta": {
+    "asOf": "2026-08-27T00:00:00Z",
+    "disclaimer": "Educational data. Not for investment use.",
+    "symbol": "TITAN.BO",
+    "source": "stored",
+    "partial": true,
+    "availableFrom": "2026-08-27"
   }
 }

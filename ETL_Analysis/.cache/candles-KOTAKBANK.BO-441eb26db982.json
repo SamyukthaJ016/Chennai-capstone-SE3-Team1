@@ -1,7 +1,27 @@
 {
-  "error": {
-    "code": "BACKFILL_IN_PROGRESS",
-    "message": "Historical data is being prepared; retry later.",
-    "details": {}
+  "data": {
+    "symbol": "KOTAKBANK.BO",
+    "interval": "1d",
+    "currency": "INR",
+    "candles": [
+      {
+        "date": "2026-08-27",
+        "open": 416.70001220703125,
+        "high": 427,
+        "low": 415,
+        "close": 425.25,
+        "adjclose": 425.25,
+        "volume": 298144,
+        "synthetic": false
+      }
+    ]
+  },
+  "meta": {
+    "asOf": "2026-08-27T00:00:00Z",
+    "disclaimer": "Educational data. Not for investment use.",
+    "symbol": "KOTAKBANK.BO",
+    "source": "stored",
+    "partial": true,
+    "availableFrom": "2026-08-27"
   }
 }
