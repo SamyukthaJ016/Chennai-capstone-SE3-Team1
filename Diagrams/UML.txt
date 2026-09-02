@@ -140,6 +140,7 @@ Client "1" --> "*" PortfolioPosition : owns
 
 PortfolioHolding "*" --> "1" Instrument
 PortfolioPosition "*" --> "1" Instrument
-
+Order "1" --> "0..1" InProgress
 Order "1" --> "0..1" TransactionSuccess
 Order "1" --> "0..1" TransactionFailure
+
