@@ -1,0 +1,39 @@
+sequenceDiagram
+    actor Client
+    participant Portfolio
+    participant Orders
+    participant InProgress
+    participant TerminalState
+    
+    Client->>+Orders: Place Order
+    alt balance sufficient
+    Orders-->+Client: Check balance
+    
+    Orders->> InProgress: Place Order
+    
+    InProgress->>InProgress: Check for available units
+     
+    alt all units available
+    InProgress->>TerminalState: Transaction Sucess(allot avaiable units)
+    TerminalState-->Portfolio: Update portfolio
+    TerminalState-->Client: Update Balance
+    else Partial
+    InProgress->>TerminalState: move to Transaction Sucess(allot avaiable units)
+    TerminalState-->InProgress: create new InProgress record with same OrderId
+    TerminalState-->Portfolio: Update portfolio
+    TerminalState-->Client: Update Balance
+    InProgress->>InProgress: wait for units
+    end
+    else balance insufficient
+    Orders-->Client: Notify failure
+    
+    end
+    
+    
+     
+
+
+    
+    
+    
+    

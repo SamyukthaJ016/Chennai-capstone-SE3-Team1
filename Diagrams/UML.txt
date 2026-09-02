@@ -48,7 +48,7 @@ class Order {
     +Enum orderType
     +Enum transactionType
     +Integer quantity
-    +BigDecimal pricePerUnit
+    
     +String exchange
     +String status
     +LocalDateTime orderTimestamp
@@ -76,13 +76,16 @@ class PortfolioHolding {
     +Long clientId
     +Long instrumentId
     +Integer quantity
-    +BigDecimal avgPrice
+
+    +BigDecimal pricePerUnit
     +LocalDateTime createdAt
     +LocalDateTime updatedAt
+    +BigDecimal pnlPrice
 
     +incrementQuantity(qty)
     +decrementQuantity(qty)
     +calculateHoldingValue(marketPrice)
+    +calculatePnL(currentPrice)
 }
 
 class PortfolioPosition {
@@ -90,6 +93,7 @@ class PortfolioPosition {
     +Long clientId
     +Long instrumentId
     +Integer quantity
+    +BigDecimal pricePerUnit
     +BigDecimal pnlPrice
     +LocalDateTime createdAt
     +LocalDateTime updatedAt
@@ -101,7 +105,8 @@ class PortfolioPosition {
 class TransactionSuccess {
     +Long transactionId
     +Long orderId
-    +BigDecimal value
+    +BigDecimal quantity
+    +BigDecimal pricePerUnit
     +LocalDateTime transactionTimestamp
 
     +settle()
