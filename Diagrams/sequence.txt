@@ -29,6 +29,7 @@ sequenceDiagram
                 end
             else 
                 InProgressService->>TerminalStateService: Move to Transaction failure 
+            end
         else not scheduled order
             alt units available
                 InProgressService->>TerminalStateService: Transaction Sucess(allot avaiable units)
