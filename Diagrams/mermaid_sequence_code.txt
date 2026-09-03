@@ -1,0 +1,240 @@
+sequenceDiagram
+    autonumber
+    actor Client
+    participant PortfolioService
+    participant OrdersService
+    participant InProgressService
+    participant TerminalStateService
+
+    Note over Client,TerminalStateService: DESIGN ASSUMPTIONS:<br/>- PortfolioService owns account, cash and holdings validation.<br/>- OrdersService owns order state and audit history.<br/>- Rules execute in order. first failure wins.<br/>- Every order attempt is recorded.<br/>- No state changes before validation passes.<br/>- NEW is active, FILLED, REJECTED and CANCELLED are final states.<br/>- Every status change creates order_history.
+    Client->>PortfolioService: Place Order with PlaceOrderRequest
+
+    Note over PortfolioService: PortfolioService is the entry point for order placement.<br/>It owns all checks that require knowledge of the customer portfolio, including account status, available cash and holdings.
+    %% ================================================================
+    %% RULE 1
+    %% ================================================================
+    PortfolioService->>PortfolioService: lookup account by accountId
+
+    alt RULE 1 FAILS - account does not exist
+
+        Note over PortfolioService: Assumption: an unknown account cannot proceed further.<br/>The failure is recorded before returning the error.
+
+        PortfolioService->>OrdersService: record rejected order attempt ACC-404
+        OrdersService->>OrdersService: insert orders row REJECTED
+        OrdersService->>OrdersService: insert order_history ACC-404
+        OrdersService-->>PortfolioService: rejection recorded with order_id
+        PortfolioService-->>Client: ACC-404 Account not found
+
+    else RULE 1 HOLDS
+
+        %% ============================================================
+        %% RULE 2
+        %% ============================================================
+        PortfolioService->>PortfolioService: read account status
+
+        alt RULE 2 FAILS - account not ACTIVE
+
+            Note over PortfolioService: Suspended or closed accounts stop here.<br/>The contract intentionally returns account status failure before checking funds or holdings.
+
+            PortfolioService->>OrdersService: record rejected order attempt ACC-403
+            OrdersService->>OrdersService: insert orders row REJECTED
+            OrdersService->>OrdersService: insert order_history ACC-403
+            OrdersService-->>PortfolioService: rejection recorded with order_id
+            PortfolioService-->>Client: ACC-403 Account not active
+
+        else RULE 2 HOLDS
+
+            %% ========================================================
+            %% RULE 3
+            %% ========================================================
+            PortfolioService->>PortfolioService: lookup instrument and tradable flag
+
+            alt RULE 3 FAILS - unknown or not tradable
+
+                Note over PortfolioService: Instruments are never deleted.<br/>A delisted instrument remains visible but cannot accept new orders.
+
+                PortfolioService->>OrdersService: record rejected order attempt INS-404
+                OrdersService->>OrdersService: insert orders row REJECTED
+                OrdersService->>OrdersService: insert order_history INS-404
+                OrdersService-->>PortfolioService: rejection recorded with order_id
+                PortfolioService-->>Client: INS-404 Instrument not found
+
+            else RULE 3 HOLDS
+
+                %% ====================================================
+                %% RULE 4
+                %% ====================================================
+                PortfolioService->>PortfolioService: validate quantity
+
+                alt RULE 4 FAILS - quantity invalid
+
+                    Note over PortfolioService: Quantity validation exists here even if DTO validation exists.<br/>Domain rules must protect against internal callers bypassing API validation.
+
+                    PortfolioService->>OrdersService: record rejected order attempt VAL-422
+                    OrdersService->>OrdersService: insert orders row REJECTED
+                    OrdersService->>OrdersService: insert order_history VAL-422
+                    OrdersService-->>PortfolioService: rejection recorded with order_id
+                    PortfolioService-->>Client: VAL-422 Invalid input
+
+                else RULE 4 HOLDS
+
+                    %% =================================================
+                    %% RULE 5
+                    %% =================================================
+                    PortfolioService->>PortfolioService: validate price
+
+                    alt RULE 5 FAILS - price invalid
+
+                        PortfolioService->>OrdersService: record rejected order attempt VAL-422
+                        OrdersService->>OrdersService: insert orders row REJECTED
+                        OrdersService->>OrdersService: insert order_history VAL-422
+                        OrdersService-->>PortfolioService: rejection recorded with order_id
+                        PortfolioService-->>Client: VAL-422 Invalid input
+
+                    else RULE 5 HOLDS
+
+                        %% =================================================
+                        %% RULE 6
+                        %% =================================================
+                        PortfolioService->>PortfolioService: calculate notional and check BUY affordability
+
+                        alt RULE 6 FAILS - insufficient funds
+
+                            Note over PortfolioService: Funds are checked before deduction.<br/>A failed order must never temporarily create a negative balance.
+
+                            PortfolioService->>OrdersService: record rejected order attempt ORD-400
+                            OrdersService->>OrdersService: insert orders row REJECTED
+                            OrdersService->>OrdersService: insert order_history ORD-400
+                            OrdersService-->>PortfolioService: rejection recorded with order_id
+                            PortfolioService-->>Client: ORD-400 Insufficient funds
+
+                        else RULE 6 HOLDS
+
+                            %% =================================================
+                            %% RULE 7
+                            %% =================================================
+                            PortfolioService->>PortfolioService: check SELL holdings
+
+                            alt RULE 7 FAILS - insufficient holdings
+
+                                Note over PortfolioService: Short selling is not supported.<br/>A position cannot become negative.
+
+                                PortfolioService->>OrdersService: record rejected order attempt ORD-409
+                                OrdersService->>OrdersService: insert orders row REJECTED
+                                OrdersService->>OrdersService: insert order_history ORD-409
+                                OrdersService-->>PortfolioService: rejection recorded with order_id
+                                PortfolioService-->>Client: ORD-409 Insufficient holdings
+
+                            else RULE 7 HOLDS
+
+                                %% =================================================
+                                %% RULE 8
+                                %% =================================================
+                                PortfolioService->>OrdersService: create order with idempotency_key
+
+                                Note over OrdersService: Idempotency is enforced by INSERT uniqueness.<br/>A read-then-write check is not safe because two requests can race.
+
+                                OrdersService->>OrdersService: INSERT using unique constraint on idempotency_key
+
+                                alt RULE 8 FAILS - duplicate key
+
+                                    OrdersService-->>PortfolioService: ORD-409 Duplicate order
+                                    PortfolioService-->>Client: ORD-409 Duplicate order
+
+                                else RULE 8 HOLDS
+
+                                    OrdersService->>OrdersService: insert orders row status NEW
+                                    OrdersService->>OrdersService: insert ORDER_RECEIVED history
+
+                                    OrdersService-->>PortfolioService: order committed order_id NEW
+                                    PortfolioService-->>Client: Order accepted status NEW
+
+
+                                    %% =================================================
+                                    %% EXECUTION FLOW
+                                    %% =================================================
+
+                                    OrdersService->>InProgressService: submit NEW order for processing
+
+                                    Note over InProgressService: From this point execution is asynchronous.<br/>Acceptance only means the order entered the workflow.
+
+                                    InProgressService->>OrdersService: insert SUBMITTED_TO_EXTERNAL history
+                                    OrdersService-->>InProgressService: history recorded
+
+                                    InProgressService-->>OrdersService: order accepted for execution
+
+                                    InProgressService->>TerminalStateService: execute order
+
+                                    TerminalStateService->>TerminalStateService: call External Trade API and store raw response
+
+
+                                    alt External API FILLS order
+
+                                        TerminalStateService-->>InProgressService: execution success FILLED
+
+                                        TerminalStateService->>OrdersService: update order status FILLED
+                                        OrdersService-->>TerminalStateService: status updated
+
+                                        TerminalStateService->>OrdersService: insert ORDER_FILLED history
+                                        OrdersService-->>TerminalStateService: history recorded
+
+                                        TerminalStateService-->>PortfolioService: settle fill
+
+                                        Note over PortfolioService: Cash and holdings update together.<br/>Settlement must be atomic.
+
+                                        PortfolioService->>PortfolioService: update cash and holdings
+
+                                        PortfolioService-->>TerminalStateService: settlement complete
+
+                                        PortfolioService-->>Client: Order FILLED balance and portfolio updated
+
+
+                                    else External API REJECTS order
+
+                                        TerminalStateService-->>InProgressService: execution failed REJECTED
+
+                                        TerminalStateService->>OrdersService: update order status REJECTED
+                                        OrdersService-->>TerminalStateService: status updated
+
+                                        TerminalStateService->>OrdersService: insert EXTERNAL_REJECTED history with response
+                                        OrdersService-->>TerminalStateService: history recorded
+
+                                        TerminalStateService-->>PortfolioService: no settlement required
+
+                                        PortfolioService-->>Client: Order REJECTED no cash or holdings changed
+
+
+                                    else Customer cancels before fill
+
+                                        Client->>PortfolioService: Cancel Order
+
+                                        PortfolioService->>InProgressService: request cancellation
+
+                                        InProgressService->>TerminalStateService: cancel execution
+
+                                        TerminalStateService->>TerminalStateService: cancel with External Trade API
+
+                                        TerminalStateService->>OrdersService: update order status CANCELLED
+                                        OrdersService-->>TerminalStateService: status updated
+
+                                        TerminalStateService->>OrdersService: insert ORDER_CANCELLED history
+                                        OrdersService-->>TerminalStateService: history recorded
+
+                                        TerminalStateService-->>InProgressService: cancellation complete
+
+                                        InProgressService-->>PortfolioService: cancellation confirmed
+
+                                        PortfolioService-->>Client: Order CANCELLED
+
+                                    end
+
+                                    Note over Client,TerminalStateService: Order lifecycle:<br/>NEW → FILLED<br/>NEW → REJECTED<br/>NEW → CANCELLED<br/><br/>Invalid state transitions are rejected.<br/>There are no partial fills.
+
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
