@@ -1,155 +1,189 @@
 classDiagram
 
-class BankAccount {
-    +String accountNumber
-    +String name
-    +String phone
-    +String email
-    +BigDecimal accountBalance
-    +String bankName
-    +String ifscCode
-    +Integer version
+%% ── Enums ────────────────────────────────────────────────────────
+class AccountState {
+    <<enumeration>>
+    ACTIVE
+    INACTIVE
+    SUSPENDED
+}
 
-    +deposit(amount)
-    +withdraw(amount)
-    +getBalance()
-    +updateContact(phone, email)
+class OrderStatus {
+    <<enumeration>>
+    NEW
+    IN_PROGRESS
+    COMPLETED
+    FAILED
+    CANCELLED
+}
+
+class OrderType {
+    <<enumeration>>
+    POSITION
+    HOLDING
+}
+
+class TransactionType {
+    <<enumeration>>
+    BUY
+    SELL
+}
+
+class OrderSide {
+    <<enumeration>>
+    BUY
+    SELL
+}
+
+%% ── Entities ─────────────────────────────────────────────────────
+class BankAccount {
+    -UUID clientId
+    -Integer accountNumber
+    -String name
+    -String phone
+    -String email
+    -BigDecimal accountBalance
+    -String bankName
+    -String ifscCode
+    +getBalance() BigDecimal
+    +deposit(amount) void
+    +withdraw(amount) void
+    +updateContact(phone, email) void
 }
 
 class Client {
-    +Long clientId
-    +Integer accountNumber
-    +String name
-    +String email
-    +String phone
-    +LocalDateTime createdOn
-    +String accountState
-    +Integer walletBalance
-    +placeOrder(order)
-    +getPortfolio()
-    +updateProfile()
+    -UUID clientId
+    -Long userId
+    -Integer accountNumber
+    -String name
+    -String email
+    -String phone
+    -LocalDateTime createdOn
+    -String accountState
+    -BigDecimal walletBalance
+    +canTrade() boolean
+    +activate() void
+    +suspend() void
+    +deactivate() void
+    +canAfford(amount) boolean
+    +credit(amount) void
+    +debit(amount) void
+    +updateProfile(name, email, phone) void
 }
 
 class Auth {
-    +String email
-    +String password
-    +LocalDateTime created
-    +LocalDateTime updated
-
-    +authenticate(password)
-    +changePassword(password)
-    +resetPassword()
-}
-
-class Order {
-    +Long orderId
-    +Long clientId
-    +Long instrumentId
-    +Enum orderType
-    +Enum transactionType
-    +Integer quantity
-    +Boolean Scheduled
-    
-    +String exchange
-    +String status
-    +LocalDateTime orderTimestamp
-    +String idempotencyKey
-
-    +validateOrder()
-    +execute()
-    +cancel()
-    +calculateAmount()
+    -UUID clientId
+    -String email
+    -String passwordHash
+    -LocalDateTime created
+    -LocalDateTime updated
+    +authenticate(candidateHash) boolean
+    +changePassword(newPasswordHash) void
 }
 
 class Instrument {
-    +Long instrumentId
-    +String instrumentName
-    +Boolean active
-    +LocalDateTime deletedOn
+    -String instrumentId
+    -String instrumentName
+    -boolean active
+    -LocalDateTime updatedOn
+    +activate() void
+    +deactivate() void
+    +isTradable() boolean
+}
 
-    +activate()
-    +deactivate()
-    +isTradable()
+class Order {
+    -Long orderId
+    -Long userId
+    -Long accountId
+    -String instrumentId
+    -OrderType orderType
+    -TransactionType side
+    -BigDecimal quantity
+    -BigDecimal price
+    -OrderStatus status
+    -String idempotencyKey
+    -String externalOrderId
+    -LocalDateTime createdAt
+    -LocalDateTime updatedAt
+    +markInProgress() void
+    +markCompleted() void
+    +markFailed() void
+    +cancel() void
+}
+
+class OrderHistory {
+    -Long historyId
+    -Long orderId
+    -String eventType
+    -OrderStatus previousStatus
+    -OrderStatus newStatus
+    -String failureCode
+    -String failureReason
+    -LocalDateTime eventTimestamp
+}
+
+class PortfolioEntry {
+    <<abstract>>
+    -Long id
+    -UUID clientId
+    -String instrumentId
+    -int quantity
+    -BigDecimal pricePerUnit
+    -BigDecimal overallGains
+    -LocalDateTime createdAt
+    -LocalDateTime updatedAt
+    +calculateOverallGains(currentPrice) void
 }
 
 class PortfolioHolding {
-    +Long holdingId
-    +Long clientId
-    +Long instrumentId
-    +Integer quantity
-
-    +BigDecimal pricePerUnit
-    +LocalDateTime createdAt
-    +LocalDateTime updatedAt
-    +BigDecimal pnlPrice
-
-    +incrementQuantity(qty)
-    +decrementQuantity(qty)
-    +calculateHoldingValue(marketPrice)
-    +calculatePnL(currentPrice)
+    +incrementQuantity(qty) void
+    +decrementQuantity(qty) void
+    +calculateHoldingValue(marketPrice) BigDecimal
 }
 
 class PortfolioPosition {
-    +Long positionId
-    +Long clientId
-    +Long instrumentId
-    +Integer quantity
-    +BigDecimal pricePerUnit
-    +BigDecimal pnlPrice
-    +LocalDateTime createdAt
-    +LocalDateTime updatedAt
-
-    +calculatePnL(currentPrice)
-    +updatePosition()
 }
 
-class TransactionSuccess {
-    +Long transactionId
-    +Long orderId
-    +BigDecimal quantity
-    +BigDecimal pricePerUnit
-    +LocalDateTime transactionTimestamp
-
-    +settle()
-    +generateReceipt()
+class PlaceOrderRequest {
+    -Long accountId
+    -String symbol
+    -OrderSide side
+    -Integer quantity
+    -BigDecimal price
+    -String idempotencyKey
 }
 
-class TransactionFailure {
-    +Long transactionId
-    +Long orderId
-    +String errorId
-    +BigDecimal value
-    +String reasonForFailure
-    +LocalDateTime transactionTimestamp
-
-    +retry()
-    +logFailure()
+class PortfolioService {
+    +placeOrder(request) Order
 }
 
-class InProgress {
-    +Long progressId
-    +Long orderId
-    +Boolean Scheduled
-    +Long instrumentId
-    +Integer quantity
-    +LocalDateTime enteredTimestamp
-
-    +markCompleted()
-    +markFailed()
+class OrdersService {
+    +claimIdempotencyKey(idempotencyKey) boolean
 }
 
-Client "1" --> "1" Auth : authenticates
-Client "1" --> "1" BankAccount : owns
+%% ── Inheritance ─────────────────────────────────────────────────
+PortfolioEntry <|-- PortfolioHolding
+PortfolioEntry <|-- PortfolioPosition
+
+%% ── Enum usage ──────────────────────────────────────────────────
+Client ..> AccountState
+Order --> OrderStatus
+Order --> OrderType
+Order --> TransactionType
+PlaceOrderRequest --> OrderSide
+
+%% ── Domain associations ───────────────────────────────────────────
+Client "1" --> "0..1" BankAccount : owns
+Client "1" --> "0..1" Auth : authenticates
 Client "1" --> "*" Order : places
-
 Order "*" --> "1" Instrument : trades
-
+Order "1" --> "*" OrderHistory : audit trail
 Client "1" --> "*" PortfolioHolding : owns
 Client "1" --> "*" PortfolioPosition : owns
-
 PortfolioHolding "*" --> "1" Instrument
 PortfolioPosition "*" --> "1" Instrument
-Order "1" --> "0..1" InProgress
-Order "1" --> "0..1" TransactionSuccess
-Order "1" --> "0..1" TransactionFailure
 
+%% ── Service layer ──────────────────────────────────────────────
+PlaceOrderRequest ..> PortfolioService : submitted via
+PortfolioService --> OrdersService : delegates idempotency check
+PortfolioService ..> Order : creates
