@@ -18,23 +18,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Client is the account: it holds the wallet balance and the account state.
- *
- * WRITTEN TEST-FIRST. These tests are red on purpose. Client does not yet
- * carry the money operations or the state transitions, so this class does not
- * compile until the following are added to Client:
- *
- *   void       credit(BigDecimal amount)
- *   void       debit(BigDecimal amount)
- *   boolean    canAfford(BigDecimal amount)
- *   void       suspend()
- *   void       activate()
- *   void       deactivate()
- *   boolean    canTrade()
- *
- * Everything else these tests touch exists today. The refusals below use
- * IllegalArgumentException for a bad argument and IllegalStateException for a
- * debit the balance cannot cover, which is the convention PortfolioHolding
- * already follows in decrementQuantity.
  */
 class AccountTest {
 

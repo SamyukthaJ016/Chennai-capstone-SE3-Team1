@@ -37,33 +37,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Business rules 1 to 8, each one firing and each one not firing, plus the
  * evaluation order itself.
- *
- * WRITTEN TEST-FIRST. These tests are red on purpose: none of the rules
- * exists yet. The lanes are the ones the approved sequence diagram uses -
- * PortfolioService answers rules 1 to 7 and OrdersService answers rule 8.
- * This class does not compile until the following exist:
- *
- *   com.team1.trading.domain.service.OrdersService
- *       boolean claimIdempotencyKey(String idempotencyKey)   // atomic claim, not a read
- *
- *   com.team1.trading.domain.service.PortfolioService
- *       PortfolioService(Map<Long, Client> accountsByAccountId,
- *                        Map<String, Instrument> instrumentsBySymbol,
- *                        List<PortfolioHolding> holdings,
- *                        OrdersService orders)
- *       Order placeOrder(PlaceOrderRequest request)
- *
- *   com.team1.trading.domain.exception
- *       DomainException                 abstract base, String getCode()
- *       AccountNotFoundException        ACC-404   rule 1
- *       AccountNotActiveException       ACC-403   rule 2
- *       InstrumentNotFoundException     INS-404   rule 3
- *       InvalidOrderException           VAL-422   rules 4 and 5
- *       InsufficientFundsException      ORD-400   rule 6
- *       InsufficientHoldingsException   ORD-409   rule 7
- *       DuplicateOrderException         ORD-409   rule 8
- *
- * AccountTest also requires credit() and the state methods on Client.
  */
 class OrderLogicTest {
 
@@ -85,8 +58,6 @@ class OrderLogicTest {
         orders = new OrdersService();
         service = new PortfolioService(accounts, instruments, holdings, orders);
     }
-
-    // ---------- fixtures ----------
 
     private Client account(long accountId, String balance, String state) {
         Client client = new Client(accountId, (int) accountId, "Holder " + accountId,

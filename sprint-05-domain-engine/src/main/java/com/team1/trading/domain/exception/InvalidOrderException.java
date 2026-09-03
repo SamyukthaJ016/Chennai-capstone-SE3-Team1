@@ -8,7 +8,7 @@ package com.team1.trading.domain.exception;
  * hold for a caller that never ran one. That is why these two are checked
  * twice, and this is what the second check throws.
  */
-public class InvalidOrderException extends DomainException {
+public class InvalidOrderException extends com.team1.trading.domain.exception.DomainException {
 
     public static final String CODE = "VAL-422";
     public static final String MESSAGE = "Invalid input";
