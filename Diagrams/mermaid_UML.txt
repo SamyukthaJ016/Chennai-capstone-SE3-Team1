@@ -1,0 +1,163 @@
+classDiagram
+
+%% =====================================================
+%% ENUMS
+%% =====================================================
+
+class AccountState {
+    <<enumeration>>
+    ACTIVE
+    SUSPENDED
+    CLOSED
+}
+
+class OrderStatus {
+    <<enumeration>>
+    NEW
+    IN_PROGRESS
+    FILLED
+    REJECTED
+    CANCELLED
+}
+
+class OrderSide {
+    <<enumeration>>
+    BUY
+    SELL
+}
+
+class OrderType {
+    <<enumeration>>
+    POSITION
+    HOLDING
+}
+
+%% =====================================================
+%% DOMAIN ENTITIES
+%% =====================================================
+
+class Client {
+    UUID clientId
+    String name
+    String email
+    AccountState accountState
+    BigDecimal cashBalance
+
+    +canTrade()
+    +canAfford(amount)
+    +credit(amount)
+    +debit(amount)
+}
+
+class Instrument {
+    String symbol
+    String name
+    boolean tradable
+
+    +isTradable()
+}
+
+class Order {
+    Long orderId
+    UUID clientId
+    String instrumentId
+    OrderType orderType
+    OrderSide side
+    BigDecimal quantity
+    BigDecimal price
+    OrderStatus status
+    String idempotencyKey
+    String externalOrderId
+
+    +markInProgress()
+    +markFilled()
+    +markRejected()
+    +cancel()
+}
+
+class OrderHistory {
+    Long historyId
+    Long orderId
+    String eventType
+    OrderStatus previousStatus
+    OrderStatus newStatus
+    String failureCode
+    String failureReason
+}
+
+class PortfolioEntry {
+    Long id
+    String instrumentId
+    BigDecimal quantity
+    BigDecimal averagePrice
+    BigDecimal gains
+
+    +calculateGains()
+}
+
+class PortfolioHolding {
+    +increaseQuantity(qty)
+    +decreaseQuantity(qty)
+}
+
+class PortfolioPosition {
+}
+
+%% =====================================================
+%% REQUEST MODEL
+%% =====================================================
+
+class PlaceOrderRequest {
+    Long accountId
+    String symbol
+    OrderSide side
+    BigDecimal quantity
+    BigDecimal price
+    String idempotencyKey
+}
+
+%% =====================================================
+%% SERVICES
+%% =====================================================
+
+class PortfolioService {
+    +placeOrder(request)
+    +settleTrade(order)
+}
+
+class OrdersService {
+    +createOrder(order)
+    +claimIdempotencyKey(key)
+    +updateStatus(order)
+}
+
+%% =====================================================
+%% INHERITANCE
+%% =====================================================
+
+PortfolioEntry <|-- PortfolioHolding
+PortfolioEntry <|-- PortfolioPosition
+
+%% =====================================================
+%% RELATIONSHIPS
+%% =====================================================
+
+Client "1" --> "*" Order : places
+
+Order "*" --> "1" Instrument : trades
+
+Order "1" --> "*" OrderHistory : audit trail
+
+Client "1" --> "*" PortfolioEntry : owns
+
+PortfolioEntry "*" --> "1" Instrument : references
+
+PlaceOrderRequest ..> PortfolioService : request
+
+PortfolioService --> OrdersService : creates / updates orders
+
+Client --> AccountState
+
+Order --> OrderStatus
+Order --> OrderSide
+Order --> OrderType
