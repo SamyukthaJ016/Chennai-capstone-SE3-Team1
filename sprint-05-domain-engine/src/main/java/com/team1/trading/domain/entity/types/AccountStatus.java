@@ -1,7 +1,7 @@
 package com.team1.trading.domain.entity.types;
 
-public enum AccountState {
+public enum AccountStatus {
     ACTIVE,
-    INACTIVE,
-    SUSPENDED
+    SUSPENDED,
+    CLOSED
 }

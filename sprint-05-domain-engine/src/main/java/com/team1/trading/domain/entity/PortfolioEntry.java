@@ -4,7 +4,6 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.Objects;
-import java.util.UUID;
 
 /**
  * Common shape shared by PortfolioHolding and PortfolioPosition: a
@@ -14,7 +13,7 @@ import java.util.UUID;
 public abstract class PortfolioEntry {
 
     private final Long id;
-    private final UUID clientId;
+    private final Long userId;
     private final String instrumentId;
     private int quantity;
     private BigDecimal pricePerUnit;
@@ -22,23 +21,23 @@ public abstract class PortfolioEntry {
     private final LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
-
-    protected PortfolioEntry(Long id, UUID clientId, String instrumentId, int quantity, BigDecimal pricePerUnit) {
+    protected PortfolioEntry(Long id, Long userId, String instrumentId, int quantity, BigDecimal pricePerUnit) {
         this.id = id;
-        this.clientId = Objects.requireNonNull(clientId, "clientId must not be null");
+        this.userId = Objects.requireNonNull(userId, "userId must not be null");
         this.instrumentId = Objects.requireNonNull(instrumentId, "instrumentId must not be null");
         this.quantity = quantity;
         this.pricePerUnit = pricePerUnit;
-        this.overallGains = overallGains;
+        this.overallGains = BigDecimal.ZERO;
         this.createdAt = LocalDateTime.now();
         this.updatedAt = this.createdAt;
     }
+
     public Long getId() {
         return id;
     }
 
-    public UUID getClientId() {
-        return clientId;
+    public Long getUserId() {
+        return userId;
     }
 
     public String getInstrumentId() {
@@ -72,8 +71,7 @@ public abstract class PortfolioEntry {
      * moves does.
      */
     public void calculateOverallGains(BigDecimal currentPrice) {
-        BigDecimal normalizedPrice = currentPrice;
-        this.overallGains = normalizedPrice.subtract(pricePerUnit)
+        this.overallGains = currentPrice.subtract(pricePerUnit)
                 .multiply(BigDecimal.valueOf(quantity))
                 .setScale(2, RoundingMode.HALF_UP);
         touch();
@@ -83,8 +81,11 @@ public abstract class PortfolioEntry {
         this.quantity = quantity;
     }
 
+    protected void setPricePerUnit(BigDecimal pricePerUnit) {
+        this.pricePerUnit = pricePerUnit;
+    }
+
     protected void touch() {
         this.updatedAt = LocalDateTime.now();
     }
-
 }

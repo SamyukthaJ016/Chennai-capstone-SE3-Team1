@@ -1,4 +1,6 @@
 package com.team1.trading.domain.dto;
+import com.team1.trading.domain.entity.types.OrderSide;
+
 
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validation;

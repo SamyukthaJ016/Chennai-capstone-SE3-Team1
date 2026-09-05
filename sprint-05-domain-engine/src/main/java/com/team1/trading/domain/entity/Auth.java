@@ -2,64 +2,50 @@ package com.team1.trading.domain.entity;
 
 import java.time.LocalDateTime;
 import java.util.Objects;
-import java.util.UUID;
 
 public class Auth {
 
-    private UUID clientId;
+    private Long clientId;
     private String email;
     private String passwordHash;
     private LocalDateTime created;
     private LocalDateTime updated;
+    private Integer version;
 
-    public Auth(UUID clientId, String email, String passwordHash) {
-        this.clientId = clientId;
+    public Auth(Long clientId, String email, String passwordHash) {
+        this.clientId = Objects.requireNonNull(clientId, "clientId must not be null");
         this.email = email;
-        this.passwordHash = passwordHash;
+        this.passwordHash =passwordHash;
         this.created = LocalDateTime.now();
         this.updated = this.created;
+        this.version = 0;
     }
 
-    public Auth(UUID clientId, String email, String passwordHash, LocalDateTime created, LocalDateTime updated) {
-        this.clientId = clientId;
+    public Auth(Long clientId, String email, String passwordHash, LocalDateTime created, LocalDateTime updated, Integer version) {
+        this.clientId = Objects.requireNonNull(clientId, "clientId must not be null");
         this.email = email;
         this.passwordHash = passwordHash;
-        this.created = created;
-        this.updated = updated;
+        this.created = Objects.requireNonNull(created, "created must not be null");
+        this.updated = Objects.requireNonNull(updated, "updated must not be null");
+        this.version = Objects.requireNonNull(version, "version must not be null");
     }
 
-    public UUID getClientId() {
-        return clientId;
-    }
+    public Long getClientId() { return clientId; }
+    public String getEmail() { return email; }
+    public LocalDateTime getCreated() { return created; }
+    public LocalDateTime getUpdated() { return updated; }
+    public Integer getVersion() { return version; }
 
-    public String getEmail() {
-        return email;
-    }
 
-    public LocalDateTime getCreated() {
-        return created;
-    }
-
-    public LocalDateTime getUpdated() {
-        return updated;
-    }
-
-    /**
-     * Compares against the stored hash. The actual hashing (bcrypt or
-     * similar) happens outside this class, at whatever layer receives the
-     * raw password - Auth only ever holds and compares hashes.
-     */
     public boolean authenticate(String candidateHash) {
         return this.passwordHash.equals(candidateHash);
     }
 
+
     public void changePassword(String newPasswordHash) {
         this.passwordHash = newPasswordHash;
         this.updated = LocalDateTime.now();
+        this.version++;
     }
-
-    // resetPassword() left out deliberately - whether it means "generate
-    // and email a temporary credential" or "invalidate and force a reset
-    // flow" is a security decision, not something to guess at.
 
 }

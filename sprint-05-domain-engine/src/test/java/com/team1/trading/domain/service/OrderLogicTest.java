@@ -1,11 +1,11 @@
 package com.team1.trading.domain.service;
 
-import com.team1.trading.domain.dto.OrderSide;
 import com.team1.trading.domain.dto.PlaceOrderRequest;
 import com.team1.trading.domain.entity.Client;
 import com.team1.trading.domain.entity.Instrument;
 import com.team1.trading.domain.entity.Order;
 import com.team1.trading.domain.entity.PortfolioHolding;
+import com.team1.trading.domain.entity.types.OrderSide;
 import com.team1.trading.domain.entity.types.OrderStatus;
 import com.team1.trading.domain.exception.AccountNotActiveException;
 import com.team1.trading.domain.exception.AccountNotFoundException;
@@ -60,13 +60,13 @@ class OrderLogicTest {
     }
 
     private Client account(long accountId, String balance, String state) {
-        Client client = new Client(accountId, (int) accountId, "Holder " + accountId,
+        Client client = new Client(accountId, String.valueOf(accountId), "Holder " + accountId,
                 "holder" + accountId + "@example.com", "900000000" + accountId);
         client.credit(new BigDecimal(balance));
         if ("SUSPENDED".equals(state)) {
             client.suspend();
-        } else if ("INACTIVE".equals(state)) {
-            client.deactivate();
+        } else if ("INACTIVE".equals(state) || "CLOSED".equals(state)) {
+            client.close();
         }
         accounts.put(accountId, client);
         return client;
@@ -229,7 +229,7 @@ class OrderLogicTest {
         }
 
         @Test
-        @DisplayName("Fires when quantity is absent, because a replaying caller never ran a validator")
+        @DisplayName("Fires when quantity is absent")
         void fires_whenQuantityNull() {
             PlaceOrderRequest request = buy(10, "5.00");
             request.setQuantity(null);
@@ -238,7 +238,7 @@ class OrderLogicTest {
         }
 
         @Test
-        @DisplayName("Does not fire when quantity is one, the smallest legal quantity")
+        @DisplayName("Does not fire when quantity is one")
         void doesNotFire_whenQuantityIsOne() {
             assertDoesNotThrow(() -> service.placeOrder(buy(1, "5.00")));
         }
@@ -282,7 +282,7 @@ class OrderLogicTest {
         }
 
         @Test
-        @DisplayName("Does not fire when price is one penny, the smallest legal price")
+        @DisplayName("Does not fire when price is one penny")
         void doesNotFire_whenPriceIsOnePenny() {
             assertDoesNotThrow(() -> service.placeOrder(buy(10, "0.01")));
         }

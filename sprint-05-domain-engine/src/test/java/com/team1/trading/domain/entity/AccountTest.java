@@ -7,12 +7,9 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -25,11 +22,11 @@ class AccountTest {
 
     @BeforeEach
     void setUp() {
-        account = new Client(1L, 1001, "Ada Lovelace", "ada@example.com", "9000000001");
+        account = new Client(1L, "1001", "Ada Lovelace", "ada@example.com", "9000000001");
     }
 
     @Nested
-    @DisplayName("Account state")
+    @DisplayName("Account status")
     class StateTests {
 
         @Test
@@ -47,11 +44,11 @@ class AccountTest {
         }
 
         @Test
-        @DisplayName("deactivate() moves the account to INACTIVE")
-        void deactivate_movesToInactive() {
-            account.deactivate();
+        @DisplayName("close() moves the account to CLOSED")
+        void close_movesToClosed() {
+            account.close();
 
-            assertEquals("INACTIVE", account.getAccountState());
+            assertEquals("CLOSED", account.getAccountState());
         }
 
         @Test
@@ -79,9 +76,9 @@ class AccountTest {
         }
 
         @Test
-        @DisplayName("An INACTIVE account may not trade")
-        void canTrade_falseWhenInactive() {
-            account.deactivate();
+        @DisplayName("A CLOSED account may not trade")
+        void canTrade_falseWhenClosed() {
+            account.close();
 
             assertFalse(account.canTrade());
         }
@@ -234,7 +231,7 @@ class AccountTest {
         @Test
         @DisplayName("Nothing is affordable on an empty account except zero")
         void canAfford_falseOnEmptyAccount() {
-            Client empty = new Client(2L, 1002, "Grace Hopper", "grace@example.com", "9000000002");
+            Client empty = new Client(2L, "1002", "Grace Hopper", "grace@example.com", "9000000002");
 
             assertFalse(empty.canAfford(new BigDecimal("0.01")));
         }
@@ -294,36 +291,15 @@ class AccountTest {
     class IdentityTests {
 
         @Test
-        @DisplayName("A new account generates its own clientId")
-        void newAccount_generatesClientId() {
-            assertNotNull(account.getClientId());
-        }
-
-        @Test
-        @DisplayName("Two new accounts do not share a clientId")
-        void newAccounts_haveDistinctClientIds() {
-            Client other = new Client(2L, 1002, "Grace Hopper", "grace@example.com", "9000000002");
-
-            assertNotEquals(account.getClientId(), other.getClientId());
-        }
-
-        @Test
-        @DisplayName("The numeric userId and the UUID clientId are separate identifiers")
-        void userId_andClientId_areSeparateIdentifiers() {
-            assertEquals(1L, account.getUserId());
-            assertNotNull(account.getClientId());
-        }
-
-        @Test
         @DisplayName("An account rebuilt from storage keeps the values it was given")
         void reconstructedAccount_keepsItsValues() {
-            UUID clientId = UUID.randomUUID();
             LocalDateTime createdOn = LocalDateTime.now().minusDays(3);
 
-            Client stored = new Client(clientId, 7L, 1007, "Alan Turing", "alan@example.com",
+            Client stored = new Client(7L, "1007", "Alan Turing", "alan@example.com",
                     "9000000007", createdOn, "SUSPENDED", new BigDecimal("42.50"));
 
-            assertEquals(clientId, stored.getClientId());
+            assertEquals(7L, stored.getClientId());
+            assertEquals("1007", stored.getAccountNumber());
             assertEquals("SUSPENDED", stored.getAccountState());
             assertEquals(0, new BigDecimal("42.50").compareTo(stored.getWalletBalance()));
         }

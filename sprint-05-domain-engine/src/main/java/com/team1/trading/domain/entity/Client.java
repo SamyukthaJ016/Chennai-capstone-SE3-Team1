@@ -1,18 +1,16 @@
 package com.team1.trading.domain.entity;
 
-import com.team1.trading.domain.entity.types.AccountState;
+import com.team1.trading.domain.entity.types.AccountStatus;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.Objects;
-import java.util.UUID;
 
 public class Client {
 
-    private final UUID clientId;
-    private Long userId;
-    private Integer accountNumber;
+    private Long clientId;
+    private String accountNumber;
     private String name;
     private String email;
     private String phone;
@@ -21,23 +19,21 @@ public class Client {
     private BigDecimal walletBalance;
 
     /** For a brand-new client - generates its own identifier. */
-    public Client(Long userId, Integer accountNumber, String name, String email, String phone) {
-        this.clientId = UUID.randomUUID();
-        this.userId = userId;
+    public Client(Long clientId, String accountNumber, String name, String email, String phone) {
+        this.clientId = clientId;
         this.accountNumber = Objects.requireNonNull(accountNumber, "accountNumber must not be null");
         this.name = name;
         this.email = email;
         this.phone = phone;
         this.createdOn = LocalDateTime.now();
         this.accountState = "ACTIVE";
-        this.walletBalance = BigDecimal.ZERO.setScale(2, java.math.RoundingMode.UNNECESSARY);
+        this.walletBalance = BigDecimal.ZERO.setScale(2, RoundingMode.UNNECESSARY);
     }
 
     /** For reconstructing a client already in storage, with its existing id. */
-    public Client(UUID clientId, Long userId, Integer accountNumber, String name, String email, String phone,
+    public Client(Long clientId, String accountNumber, String name, String email, String phone,
                   LocalDateTime createdOn, String accountState, BigDecimal walletBalance) {
-        this.clientId = Objects.requireNonNull(clientId, "clientId must not be null");
-        this.userId = userId;
+        this.clientId = clientId;
         this.accountNumber = Objects.requireNonNull(accountNumber, "accountNumber must not be null");
         this.name = name;
         this.email = email;
@@ -47,16 +43,12 @@ public class Client {
         this.walletBalance = walletBalance;
     }
 
-    public UUID getClientId() {
+    /** The numeric key orders.user_id references. */
+    public Long getClientId() {
         return clientId;
     }
 
-    /** The numeric key orders.user_id references. */
-    public Long getUserId() {
-        return userId;
-    }
-
-    public Integer getAccountNumber() {
+    public String getAccountNumber() {
         return accountNumber;
     }
 
@@ -92,21 +84,21 @@ public class Client {
 
     /** Business rule 2 asks this. Only an ACTIVE account trades. */
     public boolean canTrade() {
-        return AccountState.ACTIVE.name().equals(accountState);
+        return AccountStatus.ACTIVE.name().equals(accountState);
     }
 
     /** Lifts a suspension. The suspension is reversible. */
     public void activate() {
-        this.accountState = AccountState.ACTIVE.name();
+        this.accountState = AccountStatus.ACTIVE.name();
     }
 
     /** The account can still be read, it just cannot trade. */
     public void suspend() {
-        this.accountState = AccountState.SUSPENDED.name();
+        this.accountState = AccountStatus.SUSPENDED.name();
     }
 
-    public void deactivate() {
-        this.accountState = AccountState.INACTIVE.name();
+    public void close() {
+        this.accountState = AccountStatus.CLOSED.name();
     }
 
     /**
@@ -152,5 +144,4 @@ public class Client {
         }
         return amount.setScale(2, RoundingMode.HALF_UP);
     }
-
 }
