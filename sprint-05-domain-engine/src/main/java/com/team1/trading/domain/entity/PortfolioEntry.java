@@ -12,8 +12,8 @@ import java.util.Objects;
  */
 public abstract class PortfolioEntry {
 
-    private final Long id;
-    private final Long userId;
+    private final Long portifolioid;
+    private final Long clientId;
     private final String instrumentId;
     private int quantity;
     private BigDecimal pricePerUnit;
@@ -21,9 +21,9 @@ public abstract class PortfolioEntry {
     private final LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
-    protected PortfolioEntry(Long id, Long userId, String instrumentId, int quantity, BigDecimal pricePerUnit) {
-        this.id = id;
-        this.userId = Objects.requireNonNull(userId, "userId must not be null");
+    protected PortfolioEntry(Long portifolioid, Long clientId, String instrumentId, int quantity, BigDecimal pricePerUnit) {
+        this.portifolioid = portifolioid;
+        this.clientId = Objects.requireNonNull(clientId, "userId must not be null");
         this.instrumentId = Objects.requireNonNull(instrumentId, "instrumentId must not be null");
         this.quantity = quantity;
         this.pricePerUnit = pricePerUnit;
@@ -33,11 +33,11 @@ public abstract class PortfolioEntry {
     }
 
     public Long getId() {
-        return id;
+        return portifolioid;
     }
 
     public Long getUserId() {
-        return userId;
+        return clientId;
     }
 
     public String getInstrumentId() {

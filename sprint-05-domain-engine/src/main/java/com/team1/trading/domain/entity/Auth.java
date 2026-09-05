@@ -4,8 +4,6 @@ import java.time.LocalDateTime;
 import java.util.Objects;
 
 public class Auth {
-
-    private Long clientId;
     private String email;
     private String passwordHash;
     private LocalDateTime created;
@@ -13,7 +11,7 @@ public class Auth {
     private Integer version;
 
     public Auth(Long clientId, String email, String passwordHash) {
-        this.clientId = Objects.requireNonNull(clientId, "clientId must not be null");
+
         this.email = email;
         this.passwordHash =passwordHash;
         this.created = LocalDateTime.now();
@@ -21,8 +19,7 @@ public class Auth {
         this.version = 0;
     }
 
-    public Auth(Long clientId, String email, String passwordHash, LocalDateTime created, LocalDateTime updated, Integer version) {
-        this.clientId = Objects.requireNonNull(clientId, "clientId must not be null");
+    public Auth( String email, String passwordHash, LocalDateTime created, LocalDateTime updated, Integer version) {
         this.email = email;
         this.passwordHash = passwordHash;
         this.created = Objects.requireNonNull(created, "created must not be null");
@@ -30,7 +27,7 @@ public class Auth {
         this.version = Objects.requireNonNull(version, "version must not be null");
     }
 
-    public Long getClientId() { return clientId; }
+
     public String getEmail() { return email; }
     public LocalDateTime getCreated() { return created; }
     public LocalDateTime getUpdated() { return updated; }
