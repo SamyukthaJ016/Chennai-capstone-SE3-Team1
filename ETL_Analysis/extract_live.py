@@ -125,10 +125,16 @@ def _api_key() -> str:
     return key
 
 
-def _cache_path(symbol: str, start: str | None, end: str | None) -> Path:
-    """One file per symbol+range. Hashed so a symbol like FX:EUR/USD is a
-    legal filename."""
-    token = f"{symbol}|{start or ''}|{end or ''}"
+def _cache_path(symbol: str, start: str | None, end: str | None,
+                interval: str | None = None) -> Path:
+    """One file per symbol+range+interval. Hashed so a symbol like FX:EUR/USD
+    is a legal filename.
+
+    The interval is in the key because a weekly pull and a daily pull of the
+    same symbol over the same dates are different responses; sharing a cache
+    entry between them would serve one as the other.
+    """
+    token = f"{symbol}|{start or ''}|{end or ''}|{interval or ''}"
     digest = hashlib.sha256(token.encode()).hexdigest()[:12]
     safe = symbol.replace("/", "-").replace(":", "-")
     return CACHE_DIR / f"candles-{safe}-{digest}.json"
@@ -139,13 +145,20 @@ def extract(
     start: str | None = None,
     end: str | None = None,
     use_cache: bool = True,
+    interval: str | None = None,
 ) -> dict:
     """Return the raw candles envelope for `symbol`, unchanged.
 
     Hands the payload on exactly as received: no parsing, no cleaning, no
     reshaping. That is the transform's job.
+
+    `interval` is passed straight through as a request parameter. What comes
+    back is whatever the API decides to serve -- the transform reads the
+    granularity off the response rather than assuming the request was
+    honoured, so asking for one and receiving another is visible instead of
+    being relabelled.
     """
-    cache_file = _cache_path(symbol, start, end)
+    cache_file = _cache_path(symbol, start, end, interval)
 
     if use_cache and cache_file.exists():
         log.info("cache hit: %s (no quota used)", symbol)
@@ -156,7 +169,8 @@ def extract(
         raise ImportError("requests is required for the live client")
 
     url = f"{base_url()}/candles/{symbol}"
-    params = {k: v for k, v in (("start", start), ("end", end)) if v}
+    params = {k: v for k, v in (("start", start), ("end", end),
+                                ("interval", interval)) if v}
     headers = {"X-Api-Key": _api_key()}  # never logged
 
     last_network_error = None

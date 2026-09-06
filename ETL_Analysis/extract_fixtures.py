@@ -42,13 +42,16 @@ def available_symbols() -> list[str]:
     return sorted(FIXTURE_BY_SYMBOL)
 
 
-def extract(symbol: str, start: str | None = None, end: str | None = None) -> dict:
+def extract(symbol: str, start: str | None = None, end: str | None = None,
+            interval: str | None = None) -> dict:
     """Return the raw candles envelope for `symbol`, unchanged.
 
-    `start` and `end` are accepted so the signature matches the live client.
-    The fixtures are fixed date ranges, so they are recorded in the returned
-    envelope's meta rather than used to filter -- filtering is a transform
-    concern, and this function must not reshape the payload.
+    `start`, `end` and `interval` are accepted so the signature matches the
+    live client. The fixtures are fixed: a fixed date range, and daily
+    candles. Asking for a different interval offline therefore changes
+    nothing, and the request is recorded in `meta` rather than pretended to
+    have been honoured -- the transform reads the granularity off the payload,
+    so the rows say `1d` because that is what the fixture holds.
     """
     try:
         filename = FIXTURE_BY_SYMBOL[symbol]
@@ -65,10 +68,12 @@ def extract(symbol: str, start: str | None = None, end: str | None = None) -> di
     payload.setdefault("meta", {})
     payload["meta"]["retrievedFrom"] = f"fixture:{filename}"
     payload["meta"]["requestedRange"] = {"start": start, "end": end}
+    payload["meta"]["requestedInterval"] = interval
     return payload
 
 
-def extract_many(symbols: list[str]) -> tuple[list[dict], list[tuple[str, str]]]:
+def extract_many(symbols: list[str],
+                 interval: str | None = None) -> tuple:
     """Extract several symbols.
 
     Returns (payloads, failures). A symbol that cannot be served is recorded as
@@ -78,7 +83,7 @@ def extract_many(symbols: list[str]) -> tuple[list[dict], list[tuple[str, str]]]
     failures: list[tuple[str, str]] = []
     for symbol in symbols:
         try:
-            payloads.append(extract(symbol))
+            payloads.append(extract(symbol, interval=interval))
         except SymbolNotAvailable as exc:
             failures.append((symbol, str(exc)))
     return payloads, failures

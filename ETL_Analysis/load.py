@@ -42,6 +42,11 @@ from pathlib import Path
 from . import transform as transform_module
 
 DEFAULT_DB_PATH = "warehouse.duckdb"
+
+#: The granularity a candle is assumed to be when the payload does not
+#: say. Every Fauxnance response so far carries `interval`, but a row
+#: with no granularity at all cannot go into a keyed table.
+DEFAULT_INTERVAL = "1d"
 SCHEMA_FILE = Path(__file__).parent / "analytics_schema.sql"
 
 log = logging.getLogger(__name__)
@@ -85,6 +90,7 @@ def price_row(row: dict, run_id: str, loaded_at: datetime) -> tuple:
     return (
         row["symbol"],
         row["date"],
+        row.get("interval") or DEFAULT_INTERVAL,
         date_key_for(row["date"]),
         exchange_for(row["symbol"]),
         row.get("currency"),
@@ -152,14 +158,17 @@ def new_run_id() -> str:
 
 INSERT_PRICE_SQL = """
 INSERT INTO daily_price (
-    symbol, trade_date, date_key, exchange, currency,
+    symbol, trade_date, "interval", date_key, exchange, currency,
     "open", "high", "low", "close", adj_close, volume,
     price_range, price_change, daily_return_pct, turnover,
     synthetic, repaired, repairs, run_id, loaded_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
-DELETE_PRICE_SQL = "DELETE FROM daily_price WHERE symbol = ? AND trade_date = ?"
+# The merge key is the GRAIN, and the grain includes the interval: re-pulling
+# a symbol weekly must not delete the daily rows it already has.
+DELETE_PRICE_SQL = ('DELETE FROM daily_price '
+                    'WHERE symbol = ? AND trade_date = ? AND "interval" = ?')
 
 INSERT_QUARANTINE_SQL = """
 INSERT INTO quarantined_candle (
@@ -224,12 +233,95 @@ def _ddl_statements(sql_text: str) -> list[str]:
     return [statement.strip() for statement in body.split(";") if statement.strip()]
 
 
-def ensure_schema(con) -> None:
-    """Create the tables if they are not already there.
+def _first_answer(con, attempts: list) -> set:
+    """Return the first introspection query that the driver understands.
 
-    The DDL is CREATE TABLE IF NOT EXISTS throughout, so this is safe on every
-    run and needs no migration ledger at this size.
+    DuckDB answers `information_schema`; the SQLite mirror the tests run the
+    real DDL against does not, and answers `sqlite_master` / `PRAGMA` instead.
+    Trying both keeps one code path under test on both, rather than leaving
+    the migration untested wherever it happens not to be running.
     """
+    for sql, params, column in attempts:
+        try:
+            rows = con.execute(sql, params).fetchall()
+        except Exception:  # noqa: BLE001 - the next dialect gets a turn
+            continue
+        return {row[column] for row in rows}
+    return set()
+
+
+def _table_names(con) -> set:
+    return _first_answer(con, [
+        ("SELECT table_name FROM information_schema.tables "
+         "WHERE table_schema = 'main'", [], 0),
+        ("SELECT name FROM sqlite_master WHERE type = 'table'", [], 0),
+    ])
+
+
+def _columns_of(con, table: str) -> set:
+    return _first_answer(con, [
+        ("SELECT column_name FROM information_schema.columns "
+         "WHERE table_schema = 'main' AND table_name = ?", [table], 0),
+        (f'PRAGMA table_info("{table}")', [], 1),
+    ])
+
+
+def migrate_interval_into_the_grain(con) -> bool:
+    """Rebuild `daily_price` with `interval` in its primary key.
+
+    Stores written before the interval existed are keyed on
+    (symbol, trade_date). That key cannot hold two granularities: pulling a
+    symbol weekly would collide with the daily rows already there, and the
+    merge would either fail or quietly replace one with the other.
+
+    CREATE TABLE IF NOT EXISTS cannot add a column, and no dialect can extend
+    a primary key in place, so the table is rebuilt. Every existing row is a
+    daily candle -- that is all the pipeline could produce until now -- so it
+    is stamped `1d`. Returns True when it actually migrated something.
+
+    Idempotent: once the column is there, this does nothing.
+    """
+    if "daily_price" not in _table_names(con):
+        return False
+    if "interval" in _columns_of(con, "daily_price"):
+        return False
+
+    log.warning("migrating daily_price: adding `interval` to the primary key; "
+                "existing rows are stamped %r", DEFAULT_INTERVAL)
+    con.execute("BEGIN TRANSACTION")
+    try:
+        for statement in _ddl_statements(SCHEMA_FILE.read_text(encoding="utf-8")):
+            if "CREATE TABLE IF NOT EXISTS daily_price" in statement:
+                con.execute(statement.replace(
+                    "CREATE TABLE IF NOT EXISTS daily_price",
+                    "CREATE TABLE daily_price__migrating"))
+                break
+        con.execute(f"""
+            INSERT INTO daily_price__migrating
+            SELECT symbol, trade_date, '{DEFAULT_INTERVAL}', date_key, exchange,
+                   currency, "open", "high", "low", "close", adj_close, volume,
+                   price_range, price_change, daily_return_pct, turnover,
+                   synthetic, repaired, repairs, run_id, loaded_at
+              FROM daily_price
+        """)
+        con.execute("DROP TABLE daily_price")
+        con.execute("ALTER TABLE daily_price__migrating RENAME TO daily_price")
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
+    return True
+
+
+def ensure_schema(con) -> None:
+    """Create the tables if they are not already there, and migrate an older
+    store into the current grain.
+
+    The DDL is CREATE TABLE IF NOT EXISTS throughout, so creation is safe on
+    every run. What it cannot do is change a table that already exists, which
+    is what `migrate_interval_into_the_grain` is for.
+    """
+    migrate_interval_into_the_grain(con)
     for statement in _ddl_statements(SCHEMA_FILE.read_text(encoding="utf-8")):
         con.execute(statement)
 
@@ -247,7 +339,8 @@ def write_result(con, result: dict, run_id: str) -> int:
 
     # Merge on the natural key: clear exactly the dates about to be written.
     for row in rows:
-        con.execute(DELETE_PRICE_SQL, [row["symbol"], row["date"]])
+        con.execute(DELETE_PRICE_SQL, [row["symbol"], row["date"],
+                                       row.get("interval") or DEFAULT_INTERVAL])
     if rows:
         con.executemany(
             INSERT_PRICE_SQL, [price_row(r, run_id, now) for r in rows]

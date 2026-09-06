@@ -304,6 +304,10 @@ def transform(payload: dict, repair: bool = True) -> dict:
         rows.append({
             "symbol": symbol,
             "date": parsed_date,
+            # Carried onto every row, not just the envelope: the store keys on
+            # it, because a weekly and a daily candle for one date are two
+            # different facts.
+            "interval": interval,
             "open": prices["open"],
             "high": prices["high"],
             "low": prices["low"],
@@ -521,6 +525,38 @@ def metrics(result: dict) -> list[dict]:
             "value": float(value),
         })
     return out
+
+
+def summarise_rows(symbol: str, rows: list[dict],
+                   quarantined: list[dict] | None = None,
+                   repair: bool = True,
+                   candles_in: int | None = None) -> dict:
+    """Derive and summarise rows that did not arrive straight from a payload.
+
+    `transform()` owns aggregation for a payload off the wire. The dashboard
+    reads rows back OUT of the store, filtered -- one exchange, one date
+    range, observed rows only -- and needs the same measures over that subset.
+    Recomputing them here rather than reading `run_metric` is deliberate: a
+    stored metric describes the whole symbol as loaded, and would silently
+    contradict the filtered chart beside it.
+
+    The rows are re-derived, so `daily_return_pct` and `turnover` describe the
+    series actually being summarised rather than the one it was cut from.
+    Mutates and returns nothing else: the caller keeps its list.
+
+    `candles_in` defaults to kept + quarantined, which is the reconciliation
+    invariant. Pass the ledger's own count to summarise a subset against what
+    originally arrived.
+    """
+    quarantined = list(quarantined or [])
+    rows.sort(key=lambda r: r["date"])
+    _derive(rows)
+    if candles_in is None:
+        candles_in = len(rows) + len(quarantined)
+    # _summarise only ever takes len() of its second argument, so a range of
+    # the right size says "this many candles arrived" without inventing the
+    # candles themselves.
+    return _summarise(symbol, range(candles_in), rows, quarantined, repair)
 
 
 def transform_many(payloads: list[dict], repair: bool = True) -> list[dict]:

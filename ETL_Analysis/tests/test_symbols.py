@@ -142,15 +142,15 @@ def test_the_capped_chart_keeps_the_biggest_movers(wide):
     assert "SYM00.NS" in charted   # largest faller
 
 
-def test_a_trimmed_chart_says_it_was_trimmed(wide_doc):
+def test_a_trimmed_chart_says_it_was_trimmed(html, wide_doc):
     """A reader must not think six symbols is all there was."""
-    assert "largest movers" in wide_doc
+    html(wide_doc).assert_contains("largest movers")
 
 
-def test_every_symbol_appears_in_the_ranked_table(wide, wide_doc):
+def test_every_symbol_appears_in_the_ranked_table(html, wide, wide_doc):
     """Charts are capped; the table is not. Nothing is hidden."""
-    for result in wide:
-        assert result["summary"]["symbol"] in wide_doc
+    html(wide_doc).assert_contains(
+        *[result["summary"]["symbol"] for result in wide])
 
 
 def test_detail_sections_are_capped(wide_doc):
@@ -164,20 +164,25 @@ def test_the_ranked_table_is_ordered_by_return(wide_doc):
     assert symbols[-1] == "SYM00.NS"
 
 
-def test_a_wide_report_still_embeds_the_bundle_only_once(wide_doc):
+def test_a_wide_report_still_embeds_the_bundle_only_once(html, wide_doc):
     """Forty symbols means many charts; the bundle must not repeat."""
-    assert wide_doc.count("plotly-bundle") == 1
+    assert html(wide_doc).embedded_bundle_count() == 1
 
 
-def test_a_narrow_pull_charts_everything(wide):
+def test_a_wide_report_still_opens_with_no_network(html, wide_doc):
+    """The artefact rule does not relax as the pull gets wider."""
+    assert html(wide_doc).script_srcs() == []
+
+
+def test_a_narrow_pull_charts_everything(html, wide):
     """The caps must not kick in on a small pull."""
     few = wide[:3]
     figure, trimmed = R.comparison_figure(few)
     assert trimmed is False
     assert len(figure["data"]) == 3
-    document = R.build_report(few, "NARROW", T.metrics)
-    assert "largest movers" not in document
-    assert document.count("<h2>SYM") == 3
+    doc = html(R.build_report(few, "NARROW", T.metrics))
+    doc.assert_absent("largest movers")
+    assert doc.count("<h2>SYM") == 3
 
 
 # ---------------------------------------------------------------------------

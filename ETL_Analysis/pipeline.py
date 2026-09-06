@@ -12,6 +12,19 @@ Run it:
 
 Switching to the live Fauxnance client is the `--live` flag: it swaps which
 `extract` callable is bound, and transform and load are untouched.
+
+WHAT A RUN PRODUCES
+    Rows in the DuckDB store, and nothing else by default. The dashboard reads
+    that store live, so it is up to date the moment a run finishes and there is
+    no artefact to regenerate:
+
+        python -m ETL_Analysis.pipeline --dashboard   # run, then open it
+        python -m ETL_Analysis.dashboard              # open it on its own
+
+    `--legacy-report` additionally writes the self-contained `report.html`.
+    That path is unchanged and still supported: a served dashboard cannot be
+    committed to the repository, and the sprint asks for an artefact that opens
+    on a machine with no network.
 """
 
 from __future__ import annotations
@@ -21,9 +34,10 @@ import logging
 import sys
 from pathlib import Path
 
-from . import (extract_fixtures, load as load_module,
-               load_print as load_print_module, report as report_module,
-               symbols as symbols_module, transform as transform_module)
+from . import (dashboard as dashboard_module, extract_fixtures,
+               load as load_module, load_print as load_print_module,
+               report as report_module, symbols as symbols_module,
+               transform as transform_module)
 
 DEFAULT_SYMBOLS = ["RELIANCE.NS", "INFY.NS", "TATASTEEL.BO"]
 
@@ -33,12 +47,22 @@ log = logging.getLogger("pipeline")
 def run(symbols: list[str], extract_fn=None, show_rows: int | None = None,
         repair: bool = True, db_path: str = load_module.DEFAULT_DB_PATH,
         to_console: bool = False,
-        report_path: str | None = report_module.DEFAULT_REPORT_PATH,
-        inline_js: bool = True) -> int:
+        report_path: str | None = None,
+        inline_js: bool = True,
+        interval: str | None = None) -> int:
     """Run the pipeline over `symbols`. Returns a process exit code.
 
     `extract_fn` is injected so the live client can be substituted without
     touching transform or load.
+
+    `report_path` is None by default: the dashboard reads the store directly,
+    so a run has nothing to render. Pass a path to also write the legacy
+    self-contained HTML report.
+
+    `interval` is passed to extract as a request parameter. Rows are stamped
+    with the granularity the response actually carried, not the one asked
+    for, so a request the API declines is visible in the store rather than
+    mislabelled.
     """
     extract_fn = extract_fn or extract_fixtures.extract
 
@@ -47,8 +71,10 @@ def run(symbols: list[str], extract_fn=None, show_rows: int | None = None,
     failures = []
     for symbol in symbols:
         try:
-            log.info("extract: %s", symbol)
-            payloads.append(extract_fn(symbol))
+            log.info("extract: %s%s", symbol,
+                     f" ({interval})" if interval else "")
+            payloads.append(extract_fn(symbol, interval=interval)
+                            if interval else extract_fn(symbol))
         except Exception as exc:  # noqa: BLE001 - reported per symbol, run continues
             log.error("extract failed for %s: %s", symbol, exc)
             failures.append((symbol, str(exc)))
@@ -73,9 +99,10 @@ def run(symbols: list[str], extract_fn=None, show_rows: int | None = None,
             log.error("%s", exc)
             return 1
 
-    # --- REPORT ----------------------------------------------------------
-    # Not an ETL step: renders what the pipeline produced. Written after
-    # the load so a report only ever describes data that actually landed.
+    # --- LEGACY REPORT ---------------------------------------------------
+    # Not an ETL step, and not the default: the dashboard reads the store
+    # rather than a rendered file. Written after the load, so the report only
+    # ever describes data that actually landed.
     if report_path:
         try:
             written = report_module.write_report(
@@ -124,6 +151,13 @@ def _report(totals: dict, failures: list) -> None:
         print(f"  report ............. {totals['report_path']}")
     if totals.get("metrics_written"):
         print(f"  metrics stored ..... {totals['metrics_written']}")
+    if totals.get("db_path"):
+        # The dashboard reads the store, so it is already showing this run --
+        # there is nothing to regenerate, only something to open.
+        command = "python -m ETL_Analysis.dashboard"
+        if totals["db_path"] != load_module.DEFAULT_DB_PATH:
+            command += f" --db {totals['db_path']}"
+        print(f"  dashboard .......... {command}")
     if failures:
         print(f"  symbols failed ..... {len(failures)}")
         for symbol, message in failures:
@@ -159,14 +193,29 @@ def main(argv: list[str] | None = None) -> int:
                         help="DuckDB file to load into (default: %(default)s)")
     parser.add_argument("--print", dest="to_console", action="store_true",
                         help="print to the console instead of loading DuckDB")
-    parser.add_argument("--report", default=report_module.DEFAULT_REPORT_PATH,
-                        help="HTML report to write (default: %(default)s)")
-    parser.add_argument("--no-report", action="store_true",
-                        help="skip writing the HTML report")
+    parser.add_argument("--claims", nargs="?", const=True, default=False,
+                        metavar="PATH",
+                        help="regenerate the business claims from the store "
+                             "this run just wrote (default path: "
+                             "ETL_Analysis/claims.md). The figures are "
+                             "computed, so the document restates itself")
+    parser.add_argument("--interval", default=None, metavar="STEP",
+                        help="candle granularity to request, e.g. 1d, 1wk, "
+                             "1mo. Offline runs serve fixtures, which are "
+                             "daily whatever is asked for")
+    parser.add_argument("--dashboard", action="store_true",
+                        help="open the live dashboard when the run finishes")
+    parser.add_argument("--legacy-report", nargs="?", const=True, default=False,
+                        metavar="PATH",
+                        help="also write the self-contained HTML report "
+                             f"(default path: {report_module.DEFAULT_REPORT_PATH}). "
+                             "The dashboard reads the store directly and needs "
+                             "no artefact; this is for the committed one")
     parser.add_argument("--cdn-js", action="store_true",
-                        help="load Plotly from a CDN instead of embedding it. "
-                             "Much smaller file, but it needs a network to "
-                             "render, which the sprint's artefact rule forbids")
+                        help="with --legacy-report, load Plotly from a CDN "
+                             "instead of embedding it. Much smaller file, but "
+                             "it needs a network to render, which the "
+                             "sprint's artefact rule forbids")
     parser.add_argument("--strict", action="store_true",
                         help="quarantine every defect instead of repairing "
                              "defects 4, 5 and 6")
@@ -226,11 +275,58 @@ def main(argv: list[str] | None = None) -> int:
             log.error("--live needs extract_live.py with a real key: %s", exc)
             return 1
 
-    return run(symbol_list, extract_fn=extract_fn, show_rows=args.rows,
-               repair=not args.strict, db_path=args.db,
-               to_console=args.to_console,
-               report_path=None if args.no_report else args.report,
-               inline_js=not args.cdn_js)
+    # --legacy-report          -> the default path
+    # --legacy-report out/x.html -> that path
+    # omitted                  -> no report; the dashboard reads the store
+    if args.legacy_report is True:
+        report_path = report_module.DEFAULT_REPORT_PATH
+    elif args.legacy_report:
+        report_path = args.legacy_report
+    else:
+        report_path = None
+
+    exit_code = run(symbol_list, extract_fn=extract_fn, show_rows=args.rows,
+                    repair=not args.strict, db_path=args.db,
+                    to_console=args.to_console, report_path=report_path,
+                    inline_js=not args.cdn_js, interval=args.interval)
+
+    # --- claims ----------------------------------------------------------
+    # Written after the load, from the store, so the document describes the
+    # data that actually landed rather than the run that was attempted.
+    if exit_code == 0 and args.claims and not args.to_console:
+        from . import claims as claims_module
+        from . import store as store_module
+
+        destination = (claims_module.DEFAULT_CLAIMS_PATH
+                       if args.claims is True else args.claims)
+        try:
+            with store_module.connect(args.db) as handle:
+                written = claims_module.write_markdown(
+                    handle, destination, args.db)
+                findings = claims_module.generate(handle)
+        except store_module.StoreUnavailable as exc:
+            log.error("could not regenerate the claims: %s", exc)
+            return 1
+        supported = sum(1 for f in findings if f.available)
+        log.info("claims: %s (%d of %d supported by this store)",
+                 written, supported, len(findings))
+        for finding in findings:
+            if not finding.available:
+                log.warning("claim unsupported - %s: %s",
+                            finding.title, finding.reason)
+    elif args.claims and args.to_console:
+        log.error("--claims reads the store, but --print wrote to the console "
+                  "instead. Nothing was loaded to generate claims from.")
+        return 1
+
+    if exit_code == 0 and args.dashboard:
+        if args.to_console:
+            log.error("--dashboard needs the DuckDB store, but --print wrote "
+                      "to the console instead. Nothing was loaded to read.")
+            return 1
+        log.info("opening the dashboard over %s", args.db)
+        return dashboard_module.launch(args.db)
+    return exit_code
 
 
 if __name__ == "__main__":

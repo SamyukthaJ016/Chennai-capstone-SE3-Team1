@@ -41,6 +41,7 @@
 CREATE TABLE IF NOT EXISTS daily_price (
     symbol            VARCHAR(20)    NOT NULL,
     trade_date        DATE           NOT NULL,
+    "interval"        VARCHAR(10)    NOT NULL,
     date_key          INTEGER        NOT NULL,
     exchange          VARCHAR(20)    NOT NULL,
     currency          VARCHAR(3),
@@ -64,9 +65,16 @@ CREATE TABLE IF NOT EXISTS daily_price (
     run_id            VARCHAR(40)    NOT NULL,
     loaded_at         TIMESTAMP      NOT NULL,
 
-    CONSTRAINT pk_daily_price PRIMARY KEY (symbol, trade_date)
+    CONSTRAINT pk_daily_price PRIMARY KEY (symbol, trade_date, "interval")
 );
 
+-- interval          The candle's granularity: 1d, 1wk, 1mo. Part of the
+--                   PRIMARY KEY because it is part of the GRAIN. A weekly
+--                   candle and a daily candle can carry the same symbol and
+--                   the same date and are not the same fact, so keying on
+--                   (symbol, trade_date) alone would let a weekly pull
+--                   silently overwrite a daily one -- and leave a chart
+--                   drawing two granularities as one series.
 -- date_key          YYYYMMDD integer, matching DIM_DATE in the contract so
 --                   this table can join to it when DIM_DATE is populated.
 -- exchange          Derived from the Fauxnance symbol scheme, using the same

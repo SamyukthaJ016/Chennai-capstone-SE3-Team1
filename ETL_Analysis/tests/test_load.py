@@ -120,11 +120,21 @@ def test_run_row_column_count_matches_the_insert_statement(results):
     assert len(L.run_row(results[0], "run", datetime.now())) == columns
 
 
+def _column_index(name: str) -> int:
+    """Where `name` sits in the INSERT_PRICE_SQL column list."""
+    columns = L.INSERT_PRICE_SQL.split("(", 1)[1].split(")", 1)[0]
+    return [c.strip().strip('"')
+            for c in columns.split(",")].index(name)
+
+
 def test_repairs_are_serialised_as_json(results):
     malformed = next(r for r in results if r["symbol"] == "TATASTEEL.BO")
     repaired = next(r for r in malformed["rows"] if r["repaired"])
     tuple_row = L.price_row(repaired, "run", datetime.now())
-    parsed = json.loads(tuple_row[17])
+    # Found by name rather than hard-coded: the tuple has to stay aligned with
+    # INSERT_PRICE_SQL, and an index literal silently rots the moment a column
+    # is added ahead of it -- which is exactly what adding `interval` did.
+    parsed = json.loads(tuple_row[_column_index("repairs")])
     assert parsed and parsed[0]["code"].startswith("repair_")
 
 

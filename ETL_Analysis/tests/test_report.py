@@ -9,8 +9,15 @@ The report is tested at its FIGURE layer: every chart is built as a plain
 `{"data": [...], "layout": {...}}` dict by a pure function, so trace counts,
 x/y values, date handling and axis titles are all checked directly. Only
 `_render` touches plotly, and `conftest.py` stubs it when plotly is absent so
-the suite runs either way -- the stub still lets the assembly assertions
-(fragments not documents, bundle embedded once) do real work.
+the suite runs either way -- the stub imitates plotly's own output shape, so
+the assembly assertions (fragments not documents, bundle embedded once, no
+script fetched over the network) mean the same thing with or without it.
+
+Assertions against the rendered document go through the `html` fixture rather
+than `assert x in document`. The inline bundle makes that string ~3.6MB, and
+pytest builds a failing `in` assertion's message by running difflib over the
+whole thing -- which never finishes, so a stale assertion looks like a hung
+suite. See `conftest.HtmlDoc`.
 """
 
 from __future__ import annotations
@@ -241,25 +248,50 @@ def test_close_figure_title_states_the_finding(results):
     assert "%" in title
 
 
+def _markers(figure) -> list:
+    """Every point marker in a per-symbol price figure, in date order.
+
+    The figure carries one trace per calendar quarter, always Q1..Q4 in that
+    order, so a symbol whose data is all in July has three empty traces and
+    one full one. Reading `data[0]` would read Q1 and see nothing.
+    """
+    return [symbol for trace in figure["data"]
+            for symbol in trace["marker"]["symbol"]]
+
+
+def _series(figure, key) -> list:
+    """One axis of a quarter-split figure, flattened back to a single series."""
+    return [value for trace in figure["data"] for value in trace[key]]
+
+
+def test_close_figure_has_one_trace_per_calendar_quarter(results):
+    """The quarter buttons address traces by position, so the four buckets
+    must always be present and always in Q1..Q4 order -- including the empty
+    ones. This is what `_markers` and `_series` above rely on."""
+    reliance = next(r for r in results if r["symbol"] == "RELIANCE.NS")
+    figure = R.close_figure(reliance)
+    assert [trace["name"] for trace in figure["data"]] == list(R.QUARTER_LABELS)
+    # July is Q3, so only the third bucket holds anything.
+    assert [len(trace["x"]) for trace in figure["data"]][:2] == [0, 0]
+
+
 def test_repaired_points_are_marked_on_the_price_chart(results):
     """A reader must be able to see which points were corrected."""
     malformed = next(r for r in results if r["symbol"] == "TATASTEEL.BO")
-    markers = R.close_figure(malformed)["data"][0]["marker"]["symbol"]
-    assert markers.count("diamond-open") == 3
+    assert _markers(R.close_figure(malformed)).count("diamond-open") == 3
 
 
 def test_clean_symbols_have_no_marked_points(results):
     reliance = next(r for r in results if r["symbol"] == "RELIANCE.NS")
-    markers = R.close_figure(reliance)["data"][0]["marker"]["symbol"]
-    assert set(markers) == {"circle"}
+    assert set(_markers(R.close_figure(reliance))) == {"circle"}
 
 
 def test_a_missing_volume_stays_null_rather_than_becoming_zero(results):
     """A zero bar would claim a day with no trading. Null leaves a gap."""
     infy = next(r for r in results if r["symbol"] == "INFY.NS")
-    figure = R.volume_figure(infy)
-    assert None in figure["data"][0]["y"]
-    assert 0 not in figure["data"][0]["y"]
+    volumes = _series(R.volume_figure(infy), "y")
+    assert None in volumes
+    assert 0 not in volumes
 
 
 def test_a_missing_volume_is_explained_on_the_chart(results):
@@ -311,22 +343,30 @@ def test_report_is_a_complete_html_document(document):
     assert document.rstrip().endswith("</html>")
 
 
-def test_the_plotly_bundle_is_embedded_exactly_once(document):
+def test_the_plotly_bundle_is_embedded_exactly_once(html, document):
     """~3MB per copy. Once per chart would make the file unusable."""
-    assert document.count("plotly-bundle") == 1
+    assert html(document).embedded_bundle_count() == 1
 
 
-def test_the_report_opens_with_no_network_by_default(document):
-    """The sprint requires artefacts that render on a locked-down machine."""
-    assert "cdn.plot.ly" not in document
-    assert "needs a network" not in document
+def test_the_report_opens_with_no_network_by_default(html, document):
+    """The sprint requires artefacts that render on a locked-down machine.
+
+    Asked as "which URLs does this page fetch a script from", not as "does
+    the text `cdn.plot.ly` appear anywhere". Plotly's embedded bundle names
+    its own CDN in a licence comment, so the substring is present in a file
+    that fetches nothing -- the question has to be asked of the script tags.
+    """
+    doc = html(document)
+    assert doc.script_srcs() == []
+    doc.assert_absent("needs a network")
 
 
-def test_cdn_mode_is_available_and_says_so(results):
+def test_cdn_mode_is_available_and_says_so(html, results):
     """Smaller files, but they need a network -- the reader should know."""
-    document = R.build_report(results, "CDN", T.metrics, inline_js=False)
-    assert "cdn.plot.ly" in document
-    assert "needs a network connection" in document
+    doc = html(R.build_report(results, "CDN", T.metrics, inline_js=False))
+    assert [src for src in doc.script_srcs() if "cdn.plot.ly" in src]
+    assert doc.embedded_bundle_count() == 0
+    doc.assert_contains("needs a network connection")
 
 
 def test_a_chart_is_rendered_for_every_figure(document):
@@ -334,37 +374,35 @@ def test_a_chart_is_rendered_for_every_figure(document):
     assert document.count("plotly-graph-div") == 2 + 2 * 3
 
 
-def test_report_names_every_symbol(results, document):
-    for result in results:
-        assert result["summary"]["symbol"] in document
+def test_report_names_every_symbol(html, results, document):
+    html(document).assert_contains(
+        *[result["summary"]["symbol"] for result in results])
 
 
-def test_report_shows_quarantined_rows_and_reasons(document):
-    assert "DUPLICATE_DATE" in document
-    assert "MISSING_FIELD" in document
-    assert "NOT_A_NUMBER" in document
+def test_report_shows_quarantined_rows_and_reasons(html, document):
+    html(document).assert_contains(
+        "DUPLICATE_DATE", "MISSING_FIELD", "NOT_A_NUMBER")
 
 
-def test_report_shows_repairs(document):
-    assert "repair_high_low" in document
-    assert "Repaired and loaded" in document
+def test_report_shows_repairs(html, document):
+    html(document).assert_contains("repair_high_low", "Repaired and loaded")
 
 
-def test_report_states_the_reconciliation_outcome(document):
-    assert "Reconciled" in document
+def test_report_states_the_reconciliation_outcome(html, document):
+    html(document).assert_contains("Reconciled")
 
 
-def test_report_carries_the_educational_disclaimer(document):
-    assert "not for investment use" in document.lower()
+def test_report_carries_the_educational_disclaimer(html, document):
+    html(document.lower()).assert_contains("not for investment use")
 
 
-def test_report_escapes_html_in_a_symbol_name():
+def test_report_escapes_html_in_a_symbol_name(html):
     """A symbol from the wire must not be able to inject markup."""
     payload = {"data": {"symbol": "<script>x</script>", "candles": []}}
     result = T.transform(payload)
-    document = R.build_report([result], "RUN", T.metrics)
-    assert "<script>x</script>" not in document
-    assert "&lt;script&gt;" in document
+    doc = html(R.build_report([result], "RUN", T.metrics))
+    doc.assert_absent("<script>x</script>")
+    doc.assert_contains("&lt;script&gt;")
 
 
 # ---------------------------------------------------------------------------
