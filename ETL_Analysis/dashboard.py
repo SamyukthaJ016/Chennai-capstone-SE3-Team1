@@ -183,9 +183,21 @@ PLOTLY_MISSING_NOTE = (
     "Every table on this page carries the same numbers in the meantime."
 )
 
+def interval_note(asked: str | None, stored: list | None) -> str:
+    stored = [i for i in (stored or []) if i]
+    if not stored:
+        return f" at {asked}" if asked else ""
+    got = ", ".join(stored)
+    if asked and stored != [asked]:
+        return (f" at {got} (you asked for {asked}; rows are stamped with what "
+                f"the response carried)")
+    return f" at {got}"
+
+
 def summarise_run(requested: list, failures: list, loaded: int,
-                  interval: str | None, rows: int | None = None) -> str:
-    asked = f" at {interval}" if interval else ""
+                  interval: str | None, rows: int | None = None,
+                  stored_intervals: list | None = None) -> str:
+    asked = interval_note(interval, stored_intervals)
     total = len(requested)
     counted = f"{loaded} of {total} symbol(s)" if failures else \
         f"{loaded} symbol(s)"
@@ -222,13 +234,14 @@ def run_pipeline_from_app(db_path: str, symbols: list, interval: str | None,
             return {"ok": False,
                     "message": f"The live client is unavailable: {exc}"}
 
-    outcome = {"failures": [], "loaded": 0, "rows": 0}
+    outcome = {"failures": [], "loaded": 0, "rows": 0, "intervals": []}
 
     def collect(event):
         if event.get("stage") == "finished":
             outcome["failures"] = list(event.get("failures") or [])
             outcome["loaded"] = event.get("extracted", 0)
             outcome["rows"] = event.get("rows_loaded", 0)
+            outcome["intervals"] = list(event.get("intervals") or [])
         if progress is not None:
             progress(event)
 
@@ -258,12 +271,52 @@ def run_pipeline_from_app(db_path: str, symbols: list, interval: str | None,
     return {"ok": not failures,
             "failures": failures,
             "loaded": outcome["loaded"],
+            "intervals": outcome["intervals"],
             "message": summarise_run(symbols, failures, outcome["loaded"],
-                                     interval, outcome["rows"])}
+                                     interval, outcome["rows"],
+                                     outcome["intervals"])}
 
 def default_run_symbols() -> list:
     from ETL_Analysis import pipeline as pipeline_module
     return list(pipeline_module.DEFAULT_SYMBOLS)
+
+
+def fixture_symbols() -> list:
+    try:
+        from ETL_Analysis import extract_fixtures
+        return list(extract_fixtures.available_symbols())
+    except Exception:
+        return []
+
+
+def universe_file_symbols() -> list:
+    try:
+        from ETL_Analysis import symbols as symbols_module
+        return list(symbols_module.load_symbol_file())
+    except Exception:
+        return []
+
+
+def run_symbol_options(in_store=None) -> list:
+    seen = []
+    for source in (default_run_symbols(), fixture_symbols(),
+                   [row["symbol"] for row in (in_store or [])
+                    if isinstance(row, dict) and row.get("symbol")],
+                   universe_file_symbols()):
+        for symbol in source:
+            if symbol and symbol not in seen:
+                seen.append(symbol)
+    head = default_run_symbols()
+    return head + sorted(s for s in seen if s not in head)
+
+
+def chosen_symbols(picked, extra: str) -> list:
+    ordered = []
+    for symbol in list(picked or []) + (extra or "").replace(",", " ").split():
+        symbol = symbol.strip()
+        if symbol and symbol not in ordered:
+            ordered.append(symbol)
+    return ordered
 
 def _escape(text) -> str:
     return html_module.escape(str(text), quote=True)
@@ -539,9 +592,18 @@ def run_app(db_path: str = DEFAULT_DB_PATH) -> None:
                 help="Passed to the API as the candle granularity. Rows are "
                      "stamped with what the response actually carried, not "
                      "what was asked for.")
-            run_symbols = st.text_input(
-                "Symbols", value=" ".join(default_run_symbols()),
-                help="Space-separated. Offline these must be fixture symbols.")
+            offline_only = fixture_symbols()
+            picked_symbols = st.multiselect(
+                "Symbols to pull", options=run_symbol_options(universe),
+                default=default_run_symbols(),
+                placeholder="Choose one or more symbols",
+                help="The symbol file, whatever is already in the store, and "
+                     "the bundled fixtures. Offline only "
+                     + ", ".join(offline_only) + " resolve.")
+            extra_symbols = st.text_input(
+                "Other symbols", value="",
+                help="Anything not in the list above, space or comma "
+                     "separated. Left empty, only the choices above are run.")
             go_live = st.checkbox(
                 "Use the live API", value=False,
                 help="Needs FAUXNANCE_API_KEY. Unticked, the run serves the "
@@ -551,7 +613,7 @@ def run_app(db_path: str = DEFAULT_DB_PATH) -> None:
                                              use_container_width=True)
 
         if launched:
-            wanted = run_symbols.split()
+            wanted = chosen_symbols(picked_symbols, extra_symbols)
             with st.status(f"Running {len(wanted)} symbol(s)",
                            expanded=True) as status:
                 bar = st.progress(0.0)

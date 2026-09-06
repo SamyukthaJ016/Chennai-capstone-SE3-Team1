@@ -61,7 +61,10 @@ def run(symbols: list[str], extract_fn=None, show_rows: int | None = None,
     announce(stage="transform", count=len(payloads), total=total)
     log.info("transform: %d payload(s) (repair=%s)", len(payloads), repair)
     results = transform_module.transform_many(payloads, repair=repair)
-    announce(stage="load", count=len(results), total=total)
+    stored_intervals = sorted({r.get("interval") for r in results
+                               if r.get("interval")})
+    announce(stage="load", count=len(results), total=total,
+             intervals=stored_intervals)
 
     if to_console:
         log.info("load: %d result(s) -> console", len(results))
@@ -89,7 +92,7 @@ def run(symbols: list[str], extract_fn=None, show_rows: int | None = None,
             announce(stage="finished", extracted=len(payloads), total=total,
                      failures=list(failures),
                      rows_loaded=totals.get("rows_loaded", 0),
-                     run_id=totals.get("run_id"))
+                     run_id=totals.get("run_id"), intervals=stored_intervals)
             return 1
         totals["report_path"] = written
         log.info("report: %s", written)
@@ -97,7 +100,7 @@ def run(symbols: list[str], extract_fn=None, show_rows: int | None = None,
     _report(totals, failures)
     announce(stage="finished", extracted=len(payloads), total=total,
              failures=list(failures), rows_loaded=totals.get("rows_loaded", 0),
-             run_id=totals.get("run_id"))
+             run_id=totals.get("run_id"), intervals=stored_intervals)
     return 0
 
 

@@ -598,3 +598,78 @@ def test_a_locked_store_is_not_retried_forever(locked_store):
         S.connect(locked_store, allow_snapshot=False)
     budget = S.LOCK_RETRY_ATTEMPTS * S.LOCK_RETRY_SECONDS + 5
     assert clock.perf_counter() - started < budget
+
+
+import copy as _copy
+
+from ETL_Analysis import pipeline as _P
+
+INTERVAL_PLAN = {
+    "1d": ["RELIANCE.NS", "INFY.NS", "TATASTEEL.BO"],
+    "1wk": ["RELIANCE.NS", "INFY.NS"],
+    "1mo": ["RELIANCE.NS"],
+}
+
+
+def _stamped(stamp):
+    def extract(symbol, start=None, end=None, interval=None):
+        payload = _copy.deepcopy(E.extract(symbol, start, end, interval))
+        payload["data"]["interval"] = stamp
+        return payload
+    return extract
+
+
+@pytest.fixture(scope="module")
+def multi_interval_db(tmp_path_factory, capsys=None):
+    pytest.importorskip("duckdb", reason="the store is DuckDB")
+    path = str(tmp_path_factory.mktemp("intervals") / "w.duckdb")
+    for stamp, symbols in INTERVAL_PLAN.items():
+        _P.run(symbols, extract_fn=_stamped(stamp), db_path=path,
+               interval=stamp)
+    return path
+
+
+def test_the_store_lists_every_interval_it_holds(multi_interval_db):
+    with S.connect(multi_interval_db) as handle:
+        assert set(S.intervals(handle)) == set(INTERVAL_PLAN)
+
+
+@pytest.mark.parametrize("interval,expected", [
+    (stamp, sorted(symbols)) for stamp, symbols in INTERVAL_PLAN.items()])
+def test_the_universe_is_scoped_to_one_interval(multi_interval_db, interval,
+                                                expected):
+    with S.connect(multi_interval_db) as handle:
+        rows = S.universe(handle, interval)
+    names = sorted(r["symbol"] if isinstance(r, dict) else r for r in rows)
+    assert names == expected
+
+
+@pytest.mark.parametrize("interval", list(INTERVAL_PLAN))
+def test_price_records_are_scoped_to_one_interval(multi_interval_db, interval):
+    with S.connect(multi_interval_db) as handle:
+        rows = S.price_records(handle, interval=interval)
+    assert rows
+    assert {r["interval"] for r in rows} == {interval}
+
+
+def test_one_symbol_and_date_can_exist_at_several_intervals(multi_interval_db):
+    with S.connect(multi_interval_db) as handle:
+        rows = S.records(handle, 'SELECT "interval" FROM daily_price '
+                                 "WHERE symbol = ? AND trade_date = "
+                                 "(SELECT min(trade_date) FROM daily_price "
+                                 " WHERE symbol = ?)",
+                         ("RELIANCE.NS", "RELIANCE.NS"))
+    assert sorted(r["interval"] for r in rows) == ["1d", "1mo", "1wk"]
+
+
+@pytest.mark.parametrize("interval", list(INTERVAL_PLAN))
+def test_date_bounds_are_scoped_to_one_interval(multi_interval_db, interval):
+    with S.connect(multi_interval_db) as handle:
+        lo, hi = S.date_bounds(handle, interval)
+    assert lo is not None and hi is not None and lo <= hi
+
+
+def test_an_interval_the_store_does_not_hold_reads_as_empty(multi_interval_db):
+    with S.connect(multi_interval_db) as handle:
+        assert S.price_records(handle, interval="5m") == []
+        assert S.universe(handle, "5m") == []

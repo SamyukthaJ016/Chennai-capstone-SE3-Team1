@@ -295,7 +295,8 @@ def test_the_provenance_filters_are_offered(app):
 def test_the_run_form_is_offered(app):
     labels = [t.label for t in app.text_input]
     assert "Interval to request" in labels
-    assert "Symbols" in labels
+    assert "Other symbols" in labels
+    assert "Symbols to pull" in [m.label for m in app.multiselect]
     assert any("Run the pipeline" in (b.label or "") for b in app.button)
 
 
@@ -313,8 +314,8 @@ def test_running_the_pipeline_from_the_page_loads_and_refreshes(
     at.run()
     assert at.dataframe[0].value.shape[0] == 1
 
-    next(t for t in at.text_input if t.label == "Symbols").set_value(
-        "RELIANCE.NS INFY.NS TATASTEEL.BO")
+    next(m for m in at.multiselect if m.label == "Symbols to pull").set_value(
+        ["RELIANCE.NS", "INFY.NS", "TATASTEEL.BO"])
     next(b for b in at.button
          if "Run the pipeline" in (b.label or "")).click().run()
 
@@ -337,7 +338,8 @@ def test_a_failing_run_reports_instead_of_crashing_the_page(
     at = app_test.from_file(DASHBOARD_FILE, default_timeout=180)
     at.run()
 
-    next(t for t in at.text_input if t.label == "Symbols").set_value("NOPE.NS")
+    next(m for m in at.multiselect if m.label == "Symbols to pull").set_value([])
+    next(t for t in at.text_input if t.label == "Other symbols").set_value("NOPE.NS")
     next(b for b in at.button
          if "Run the pipeline" in (b.label or "")).click().run()
     assert not at.exception
@@ -644,3 +646,135 @@ def test_only_a_handful_of_failed_symbols_are_named(scratch_db):
 
 def test_the_summary_is_singular_about_rows_it_does_not_have():
     assert "row(s)" not in D.summarise_run(["A.NS"], [], 1, "1d", 0)
+
+
+def test_the_pull_list_offers_the_whole_symbol_file():
+    options = D.run_symbol_options([])
+    assert len(options) > 100
+    assert "RELIANCE.NS" in options and "TATASTEEL.BO" in options
+
+
+def test_the_defaults_come_first_in_the_pull_list():
+    options = D.run_symbol_options([])
+    assert options[:len(D.default_run_symbols())] == D.default_run_symbols()
+
+
+def test_the_pull_list_includes_what_is_already_in_the_store():
+    options = D.run_symbol_options([{"symbol": "MADEUP.NS"}])
+    assert "MADEUP.NS" in options
+
+
+def test_the_pull_list_never_repeats_a_symbol():
+    options = D.run_symbol_options([{"symbol": "RELIANCE.NS"}])
+    assert len(options) == len(set(options))
+
+
+def test_the_pull_list_survives_a_missing_symbol_file(monkeypatch):
+    monkeypatch.setattr(D, "universe_file_symbols", list)
+    options = D.run_symbol_options([])
+    assert D.default_run_symbols()[0] in options
+
+
+def test_the_defaults_are_all_selectable():
+    options = D.run_symbol_options([])
+    assert set(D.default_run_symbols()) <= set(options)
+
+
+def test_free_text_symbols_are_merged_with_the_picked_ones():
+    assert D.chosen_symbols(["A.NS"], "B.NS C.NS") == ["A.NS", "B.NS", "C.NS"]
+
+
+def test_free_text_accepts_commas_and_stray_spacing():
+    assert D.chosen_symbols([], "  A.NS ,B.NS ,, C.NS ") == ["A.NS", "B.NS", "C.NS"]
+
+
+def test_a_symbol_picked_and_typed_is_only_run_once():
+    assert D.chosen_symbols(["A.NS"], "A.NS B.NS") == ["A.NS", "B.NS"]
+
+
+def test_nothing_picked_and_nothing_typed_is_empty():
+    assert D.chosen_symbols([], "") == []
+    assert D.chosen_symbols(None, None) == []
+
+
+def test_the_interval_reported_is_the_one_the_rows_carry():
+    assert D.interval_note("1d", ["1d"]) == " at 1d"
+
+
+def test_a_different_stored_interval_is_called_out():
+    note = D.interval_note("1wk", ["1d"])
+    assert "1d" in note and "1wk" in note and "asked for" in note
+
+
+def test_the_requested_interval_is_used_when_nothing_was_stored():
+    assert D.interval_note("1wk", []) == " at 1wk"
+    assert D.interval_note(None, []) == ""
+
+
+def test_a_run_reports_the_stored_interval_not_the_requested_one(scratch_db):
+    outcome = D.run_pipeline_from_app(scratch_db, ["RELIANCE.NS"], "1wk")
+    assert outcome["intervals"] == ["1d"]
+    assert "asked for 1wk" in outcome["message"]
+
+
+import copy as _copy
+
+from ETL_Analysis import pipeline as _P
+
+INTERVAL_PLAN = {
+    "1d": ["RELIANCE.NS", "INFY.NS", "TATASTEEL.BO"],
+    "1wk": ["RELIANCE.NS", "INFY.NS"],
+    "1mo": ["RELIANCE.NS"],
+}
+
+
+def _stamped(stamp):
+    def extract(symbol, start=None, end=None, interval=None):
+        payload = _copy.deepcopy(E.extract(symbol, start, end, interval))
+        payload["data"]["interval"] = stamp
+        return payload
+    return extract
+
+
+@pytest.fixture(scope="module")
+def multi_interval_store(app_test, tmp_path_factory):
+    path = str(tmp_path_factory.mktemp("ivals") / "warehouse.duckdb")
+    for stamp, symbols in INTERVAL_PLAN.items():
+        _P.run(symbols, extract_fn=_stamped(stamp), db_path=path,
+               interval=stamp)
+    return path
+
+
+@pytest.fixture
+def multi_app(app_test, multi_interval_store, monkeypatch):
+    monkeypatch.setenv(D.CHILD_ENV_VAR, "1")
+    monkeypatch.setattr("sys.argv", ["dashboard.py", "--db",
+                                     multi_interval_store])
+    at = app_test.from_file(DASHBOARD_FILE, default_timeout=180)
+    at.run()
+    return at
+
+
+def test_the_page_offers_every_interval_in_the_store(multi_app):
+    picker = next(r for r in multi_app.radio if "interval" in (r.label or "").lower())
+    assert set(picker.options) == set(INTERVAL_PLAN)
+
+
+@pytest.mark.parametrize("interval", list(INTERVAL_PLAN))
+def test_choosing_an_interval_rescopes_the_page(multi_app, interval):
+    picker = next(r for r in multi_app.radio if "interval" in (r.label or "").lower())
+    picker.set_value(interval)
+    multi_app.run()
+
+    assert not multi_app.exception
+    instruments = next(s for s in multi_app.selectbox if s.label == "Instrument")
+    assert sorted(instruments.options) == sorted(INTERVAL_PLAN[interval])
+
+
+@pytest.mark.parametrize("interval", list(INTERVAL_PLAN))
+def test_the_page_renders_cleanly_at_every_interval(multi_app, interval):
+    picker = next(r for r in multi_app.radio if "interval" in (r.label or "").lower())
+    picker.set_value(interval)
+    multi_app.run()
+    assert not multi_app.exception
+    assert not multi_app.error
