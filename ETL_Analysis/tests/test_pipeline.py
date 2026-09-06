@@ -211,3 +211,67 @@ def test_the_store_path_is_honoured(db, tmp_path, monkeypatch):
     assert P.main(["--db", str(named), "--symbols", "RELIANCE.NS"]) == 0
     assert named.exists()
     assert not (tmp_path / L.DEFAULT_DB_PATH).exists()
+
+
+FIXTURE_TRIO = ["RELIANCE.NS", "INFY.NS", "TATASTEEL.BO"]
+
+
+def _events(symbols, db, **kw):
+    seen = []
+    P.run(symbols, db_path=db, progress=seen.append, **kw)
+    return seen
+
+
+def test_the_run_announces_every_symbol_it_starts(db):
+    seen = _events(FIXTURE_TRIO, db)
+    started = [e["symbol"] for e in seen
+               if e["stage"] == "extract" and e["state"] == "start"]
+    assert started == FIXTURE_TRIO
+
+
+def test_each_symbol_is_numbered_against_the_total(db):
+    seen = _events(FIXTURE_TRIO, db)
+    starts = [e for e in seen if e["stage"] == "extract" and e["state"] == "start"]
+    assert [e["index"] for e in starts] == [1, 2, 3]
+    assert {e["total"] for e in starts} == {3}
+
+
+def test_a_symbol_that_fails_is_announced_as_failed_with_its_error(db):
+    seen = _events(["RELIANCE.NS", "NOSUCH.NS"], db)
+    failed = [e for e in seen
+              if e["stage"] == "extract" and e["state"] == "failed"]
+    assert [e["symbol"] for e in failed] == ["NOSUCH.NS"]
+    assert "NOSUCH.NS" in failed[0]["error"]
+
+
+def test_the_finish_event_reports_what_actually_loaded(db):
+    seen = _events(["RELIANCE.NS", "NOSUCH.NS"], db)
+    finished = [e for e in seen if e["stage"] == "finished"]
+    assert len(finished) == 1
+    assert finished[0]["extracted"] == 1
+    assert finished[0]["total"] == 2
+    assert [s for s, _ in finished[0]["failures"]] == ["NOSUCH.NS"]
+    assert finished[0]["rows_loaded"] > 0
+
+
+def test_a_run_where_everything_fails_still_announces_the_finish(db):
+    seen = _events(["NOSUCH1.NS", "NOSUCH2.NS"], db)
+    finished = [e for e in seen if e["stage"] == "finished"]
+    assert finished and finished[0]["extracted"] == 0
+    assert len(finished[0]["failures"]) == 2
+
+
+def test_the_transform_and_load_stages_are_announced(db):
+    stages = {e["stage"] for e in _events(FIXTURE_TRIO, db)}
+    assert {"transform", "load"} <= stages
+
+
+def test_a_progress_callback_that_raises_does_not_break_the_run(db):
+    def explode(event):
+        raise RuntimeError("the overlay blew up")
+
+    assert P.run(FIXTURE_TRIO, db_path=db, progress=explode) == 0
+
+
+def test_progress_is_optional(db):
+    assert P.run(FIXTURE_TRIO, db_path=db) == 0

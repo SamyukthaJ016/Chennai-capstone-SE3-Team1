@@ -18,6 +18,7 @@ APP_TITLE = "Market data pipeline"
 DEFAULT_DB_PATH = store.DEFAULT_DB_PATH
 
 MAX_DISPOSITION_BARS = 40
+MAX_NAMED_FAILURES = 5
 
 SLICE_CACHE_ENTRIES = 4
 LIGHT_CACHE_ENTRIES = 32
@@ -182,8 +183,31 @@ PLOTLY_MISSING_NOTE = (
     "Every table on this page carries the same numbers in the meantime."
 )
 
+def summarise_run(requested: list, failures: list, loaded: int,
+                  interval: str | None, rows: int | None = None) -> str:
+    asked = f" at {interval}" if interval else ""
+    total = len(requested)
+    counted = f"{loaded} of {total} symbol(s)" if failures else \
+        f"{loaded} symbol(s)"
+    rowsay = f", {rows} row(s)" if rows else ""
+    message = f"Loaded {counted}{asked}{rowsay}."
+
+    if failures:
+        names = ", ".join(symbol for symbol, _ in failures[:MAX_NAMED_FAILURES])
+        more = len(failures) - MAX_NAMED_FAILURES
+        if more > 0:
+            names += f" and {more} more"
+        reason = failures[0][1] if failures else ""
+        message += f" {len(failures)} failed: {names}."
+        if reason:
+            message += f" First error: {reason}"
+    else:
+        message += " The page is showing the new data."
+    return message
+
+
 def run_pipeline_from_app(db_path: str, symbols: list, interval: str | None,
-                          live: bool = False) -> dict:
+                          live: bool = False, progress=None) -> dict:
     from ETL_Analysis import pipeline as pipeline_module
 
     symbols = [s.strip() for s in symbols if s.strip()]
@@ -193,25 +217,49 @@ def run_pipeline_from_app(db_path: str, symbols: list, interval: str | None,
     extract_fn = None
     if live:
         try:
-            from .extract_live import extract as extract_fn
+            from ETL_Analysis.extract_live import extract as extract_fn
         except ImportError as exc:
             return {"ok": False,
                     "message": f"The live client is unavailable: {exc}"}
 
+    outcome = {"failures": [], "loaded": 0, "rows": 0}
+
+    def collect(event):
+        if event.get("stage") == "finished":
+            outcome["failures"] = list(event.get("failures") or [])
+            outcome["loaded"] = event.get("extracted", 0)
+            outcome["rows"] = event.get("rows_loaded", 0)
+        if progress is not None:
+            progress(event)
+
     try:
         code = pipeline_module.run(symbols, extract_fn=extract_fn,
-                                   db_path=db_path, interval=interval)
+                                   db_path=db_path, interval=interval,
+                                   progress=collect)
     except Exception as exc:
         return {"ok": False, "message": f"The run failed: {exc}"}
 
+    failures = outcome["failures"]
+
     if code != 0:
-        return {"ok": False,
+        if failures:
+            names = ", ".join(s for s, _ in failures[:MAX_NAMED_FAILURES])
+            more = len(failures) - MAX_NAMED_FAILURES
+            if more > 0:
+                names += f" and {more} more"
+            return {"ok": False, "failures": failures,
+                    "message": (f"Nothing loaded. All {len(failures)} symbol(s) "
+                                f"failed: {names}. "
+                                f"First error: {failures[0][1]}")}
+        return {"ok": False, "failures": failures,
                 "message": ("The run finished with errors and may have loaded "
                             "nothing. Check the terminal for the log.")}
-    asked = f" at {interval}" if interval else ""
-    return {"ok": True,
-            "message": (f"Loaded {len(symbols)} symbol(s){asked}. "
-                        f"The page is showing the new data.")}
+
+    return {"ok": not failures,
+            "failures": failures,
+            "loaded": outcome["loaded"],
+            "message": summarise_run(symbols, failures, outcome["loaded"],
+                                     interval, outcome["rows"])}
 
 def default_run_symbols() -> list:
     from ETL_Analysis import pipeline as pipeline_module
@@ -503,9 +551,59 @@ def run_app(db_path: str = DEFAULT_DB_PATH) -> None:
                                              use_container_width=True)
 
         if launched:
-            outcome = run_pipeline_from_app(
-                path, run_symbols.split(), requested_interval.strip() or None,
-                live=go_live)
+            wanted = run_symbols.split()
+            with st.status(f"Running {len(wanted)} symbol(s)",
+                           expanded=True) as status:
+                bar = st.progress(0.0)
+                line = st.empty()
+                done = {"ok": 0, "failed": 0}
+
+                def show(event):
+                    stage = event.get("stage")
+                    total = max(1, event.get("total", len(wanted)))
+                    if stage == "extract":
+                        symbol = event.get("symbol", "")
+                        index = event.get("index", 0)
+                        state = event.get("state")
+                        if state == "start":
+                            line.markdown(
+                                f"**{index}/{total}** &middot; pulling "
+                                f"`{_escape(symbol)}`")
+                            return
+                        if state == "failed":
+                            done["failed"] += 1
+                            line.markdown(
+                                f"**{index}/{total}** &middot; "
+                                f"`{_escape(symbol)}` failed &mdash; "
+                                f"{_escape(event.get('error', ''))}")
+                        else:
+                            done["ok"] += 1
+                            line.markdown(
+                                f"**{index}/{total}** &middot; "
+                                f"`{_escape(symbol)}` ok")
+                        bar.progress(min(1.0, index / total))
+                    elif stage == "transform":
+                        line.markdown(
+                            f"cleaning {event.get('count', 0)} payload(s)")
+                    elif stage == "load":
+                        line.markdown(
+                            f"writing {event.get('count', 0)} result(s) "
+                            f"to the store")
+                    elif stage == "finished":
+                        bar.progress(1.0)
+                        line.markdown(
+                            f"{done['ok']} pulled &middot; "
+                            f"{done['failed']} failed")
+
+                outcome = run_pipeline_from_app(
+                    path, wanted, requested_interval.strip() or None,
+                    live=go_live, progress=show)
+                status.update(
+                    label=("Run finished" if outcome["ok"]
+                           else "Run finished with problems"),
+                    state="complete" if outcome["ok"] else "error",
+                    expanded=False)
+
             refresh()
             st.session_state["run_outcome"] = outcome
             st.rerun()

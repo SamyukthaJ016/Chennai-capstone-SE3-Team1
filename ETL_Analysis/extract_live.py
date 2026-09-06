@@ -138,7 +138,10 @@ def extract(
         if 400 <= response.status_code < 500:
             meaning = {
                 400: "bad request (a range over ten years?)",
-                401: "bad or missing API key",
+                401: f"no API key was sent; set {KEY_ENV_VAR}",
+                403: (f"the key in {KEY_ENV_VAR} reached Fauxnance and was "
+                      f"refused. It is present but not accepted: check it is "
+                      f"current, not revoked, and issued for {base_url()}"),
                 404: f"Fauxnance does not serve {symbol}",
             }.get(response.status_code, "client error")
             raise BadRequest(f"HTTP {response.status_code} for {symbol}: {meaning}")

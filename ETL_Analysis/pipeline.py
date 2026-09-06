@@ -20,12 +20,24 @@ def run(symbols: list[str], extract_fn=None, show_rows: int | None = None,
         to_console: bool = False,
         report_path: str | None = None,
         inline_js: bool = True,
-        interval: str | None = None) -> int:
+        interval: str | None = None,
+        progress=None) -> int:
     extract_fn = extract_fn or extract_fixtures.extract
+
+    def announce(**event):
+        if progress is None:
+            return
+        try:
+            progress(event)
+        except Exception:
+            log.debug("progress callback raised; continuing", exc_info=True)
 
     payloads = []
     failures = []
-    for symbol in symbols:
+    total = len(symbols)
+    for index, symbol in enumerate(symbols, start=1):
+        announce(stage="extract", symbol=symbol, index=index, total=total,
+                 state="start")
         try:
             log.info("extract: %s%s", symbol,
                      f" ({interval})" if interval else "")
@@ -34,13 +46,22 @@ def run(symbols: list[str], extract_fn=None, show_rows: int | None = None,
         except Exception as exc:
             log.error("extract failed for %s: %s", symbol, exc)
             failures.append((symbol, str(exc)))
+            announce(stage="extract", symbol=symbol, index=index, total=total,
+                     state="failed", error=str(exc))
+        else:
+            announce(stage="extract", symbol=symbol, index=index, total=total,
+                     state="done")
 
     if not payloads:
         log.error("no payloads extracted; nothing to transform")
+        announce(stage="finished", extracted=0, total=total,
+                 failures=list(failures))
         return 1
 
+    announce(stage="transform", count=len(payloads), total=total)
     log.info("transform: %d payload(s) (repair=%s)", len(payloads), repair)
     results = transform_module.transform_many(payloads, repair=repair)
+    announce(stage="load", count=len(results), total=total)
 
     if to_console:
         log.info("load: %d result(s) -> console", len(results))
@@ -51,6 +72,8 @@ def run(symbols: list[str], extract_fn=None, show_rows: int | None = None,
             totals = load_module.load_many(results, db_path=db_path)
         except ImportError as exc:
             log.error("%s", exc)
+            announce(stage="finished", extracted=len(payloads), total=total,
+                     failures=list(failures) + [("load", str(exc))])
             return 1
 
     if report_path:
@@ -63,11 +86,18 @@ def run(symbols: list[str], extract_fn=None, show_rows: int | None = None,
             log.error("%s", exc)
             log.error("the data loaded fine; only the report was skipped")
             _report(totals, failures)
+            announce(stage="finished", extracted=len(payloads), total=total,
+                     failures=list(failures),
+                     rows_loaded=totals.get("rows_loaded", 0),
+                     run_id=totals.get("run_id"))
             return 1
         totals["report_path"] = written
         log.info("report: %s", written)
 
     _report(totals, failures)
+    announce(stage="finished", extracted=len(payloads), total=total,
+             failures=list(failures), rows_loaded=totals.get("rows_loaded", 0),
+             run_id=totals.get("run_id"))
     return 0
 
 

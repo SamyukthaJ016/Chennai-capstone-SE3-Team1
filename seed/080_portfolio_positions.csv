@@ -1,0 +1,5 @@
+position_id,client_id,instrument_id,quantity,price_per_unit
+1,1,TCS,0,0.0000
+2,2,HDFCBANK,-30,1698.5000
+3,3,TATAMOTORS,200,923.1000
+4,5,HDFCBANK,0,0.0000

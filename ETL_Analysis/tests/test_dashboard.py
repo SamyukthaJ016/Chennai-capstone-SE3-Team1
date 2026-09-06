@@ -555,3 +555,92 @@ def test_a_new_run_is_picked_up_without_restarting_the_app(
     assert not at.exception
     with S.connect(store_path) as handle:
         assert len(S.runs(handle)) == 2
+
+
+SCRIPT_MODULES = ["dashboard.py"]
+
+
+@pytest.mark.parametrize("name", SCRIPT_MODULES)
+def test_a_module_run_as_a_script_uses_no_relative_imports(name):
+    import ast
+
+    source = (Path(D.__file__).parent / name).read_text(encoding="utf-8")
+    offenders = [
+        f"line {node.lineno}: from {'.' * node.level}{node.module or ''} import "
+        + ", ".join(a.name for a in node.names)
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.ImportFrom) and node.level > 0
+    ]
+    assert not offenders, (
+        name + " is handed to `streamlit run`, so it executes as __main__ with no "
+        "parent package and every relative import raises ImportError. Use the "
+        "absolute form instead:\n      " + "\n      ".join(offenders)
+    )
+
+
+def test_the_live_client_imports_without_a_parent_package():
+    scope = {"__name__": "__main__", "__package__": None}
+    exec(compile("from ETL_Analysis.extract_live import extract",
+                 "<as-main>", "exec"), scope)
+    assert "extract" in scope
+
+
+@pytest.fixture
+def scratch_db(tmp_path):
+    pytest.importorskip("duckdb", reason="the run writes DuckDB")
+    return str(tmp_path / "warehouse.duckdb")
+
+
+def test_the_message_counts_what_loaded_not_what_was_asked_for(scratch_db):
+    asked = ["RELIANCE.NS", "NOSUCH1.NS", "NOSUCH2.NS", "NOSUCH3.NS"]
+    outcome = D.run_pipeline_from_app(scratch_db, asked, "1d")
+    assert "Loaded 1 of 4" in outcome["message"], outcome["message"]
+    assert "4 symbol(s)." not in outcome["message"]
+
+
+def test_a_partly_failed_run_is_not_reported_as_a_success(scratch_db):
+    outcome = D.run_pipeline_from_app(
+        scratch_db, ["RELIANCE.NS", "NOSUCH.NS"], "1d")
+    assert outcome["ok"] is False
+    assert [s for s, _ in outcome["failures"]] == ["NOSUCH.NS"]
+
+
+def test_the_message_names_the_symbols_that_failed(scratch_db):
+    outcome = D.run_pipeline_from_app(
+        scratch_db, ["RELIANCE.NS", "NOSUCH.NS"], "1d")
+    assert "NOSUCH.NS" in outcome["message"]
+    assert "First error" in outcome["message"]
+
+
+def test_a_run_where_nothing_loads_says_so(scratch_db):
+    outcome = D.run_pipeline_from_app(scratch_db, ["NOSUCH1.NS", "NOSUCH2.NS"], "1d")
+    assert outcome["ok"] is False
+    assert "Nothing loaded" in outcome["message"]
+
+
+def test_a_clean_run_still_reads_as_a_success(scratch_db):
+    outcome = D.run_pipeline_from_app(
+        scratch_db, ["RELIANCE.NS", "INFY.NS", "TATASTEEL.BO"], "1d")
+    assert outcome["ok"] is True
+    assert "Loaded 3 symbol(s)" in outcome["message"]
+    assert "failed" not in outcome["message"]
+
+
+def test_the_run_reports_progress_for_the_overlay(scratch_db):
+    seen = []
+    D.run_pipeline_from_app(scratch_db, ["RELIANCE.NS", "NOSUCH.NS"], "1d",
+                            progress=seen.append)
+    symbols = [e["symbol"] for e in seen
+               if e["stage"] == "extract" and e["state"] == "start"]
+    assert symbols == ["RELIANCE.NS", "NOSUCH.NS"]
+    assert any(e["stage"] == "finished" for e in seen)
+
+
+def test_only_a_handful_of_failed_symbols_are_named(scratch_db):
+    many = ["NOSUCH%d.NS" % i for i in range(D.MAX_NAMED_FAILURES + 4)]
+    message = D.summarise_run(many, [(s, "boom") for s in many], 0, "1d")
+    assert "and 4 more" in message
+
+
+def test_the_summary_is_singular_about_rows_it_does_not_have():
+    assert "row(s)" not in D.summarise_run(["A.NS"], [], 1, "1d", 0)

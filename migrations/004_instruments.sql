@@ -1,22 +1,20 @@
 BEGIN;
 
 CREATE TABLE instruments (
-    instrument_id   SERIAL          PRIMARY KEY,
+    instrument_id   VARCHAR(20)     PRIMARY KEY,
     instrument_name VARCHAR(150)    NOT NULL UNIQUE,
-    is_active       BOOLEAN         NOT NULL DEFAULT TRUE,
-    delisted_on     TIMESTAMP,
-    CONSTRAINT chk_instruments_delisted_consistent
-        CHECK ( (is_active = TRUE  AND delisted_on IS NULL)
-             OR (is_active = FALSE AND delisted_on IS NOT NULL) )
+    active          BOOLEAN         NOT NULL DEFAULT TRUE,
+    updated_on      TIMESTAMP,
+    CONSTRAINT chk_instruments_id_not_blank CHECK (length(btrim(instrument_id)) > 0)
 );
 
-CREATE INDEX idx_instruments_is_active ON instruments(is_active);
+CREATE INDEX idx_instruments_active ON instruments(active);
 
 CREATE OR REPLACE FUNCTION fn_instruments_no_delete()
 RETURNS TRIGGER AS $$
 BEGIN
     RAISE EXCEPTION
-        'instrument % cannot be deleted; set is_active = FALSE instead', OLD.instrument_id
+        'instrument % cannot be deleted; set active = FALSE instead', OLD.instrument_id
         USING ERRCODE = 'restrict_violation';
 END;
 $$ LANGUAGE plpgsql;
