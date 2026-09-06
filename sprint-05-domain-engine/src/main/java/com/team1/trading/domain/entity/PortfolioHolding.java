@@ -13,11 +13,6 @@ public class PortfolioHolding extends PortfolioEntry {
         return getId();
     }
 
-    /**
-     * A buy. Recalculates the average cost across the old holding and the
-     * new units at the price they were bought at; a sell (decrementQuantity)
-     * leaves the average alone.
-     */
     public void incrementQuantity(int qty, BigDecimal priceAtBuy) {
         if (qty <= 0) {
             throw new IllegalArgumentException("qty must be greater than zero");

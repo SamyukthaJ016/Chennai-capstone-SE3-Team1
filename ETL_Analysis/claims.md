@@ -1,12 +1,8 @@
 # Business claims
 
-<!-- GENERATED FILE. Do not edit by hand: every figure below is
-     computed from the store. Regenerate with
-         python -m ETL_Analysis.claims
-     or as part of a run with
-         python -m ETL_Analysis.pipeline --claims -->
+**GENERATED FILE - do not edit by hand.** Every figure below is computed from the store. Regenerate it with `python -m ETL_Analysis.claims`, or as part of a run with `python -m ETL_Analysis.pipeline --claims`.
 
-Generated 06 September 2026, 14:03 from `warehouse.duckdb`.
+Generated 06 September 2026, 20:39 from `warehouse.duckdb`.
 
 Each claim below names a subject, a magnitude, a direction and a period, and each can be checked -- and disagreed with -- against the store it came from. None of the numbers is typed: the questions are fixed, the answers are computed, so this document and the dashboard's Claims tab cannot drift apart.
 

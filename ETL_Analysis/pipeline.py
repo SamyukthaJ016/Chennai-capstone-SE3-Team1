@@ -1,32 +1,3 @@
-"""The fourth module: wires extract -> transform -> load and does nothing else.
-
-No parsing, no cleaning, no printing of data. Every line here is either calling
-one of the three steps or reporting which step something failed in. If a number
-comes out wrong, it came from one of the three modules, not from this one.
-
-Run it:
-
-    python -m ETL_Analysis.pipeline
-    python -m ETL_Analysis.pipeline --symbols RELIANCE.NS INFY.NS
-    python -m ETL_Analysis.pipeline --live          # once a real key exists
-
-Switching to the live Fauxnance client is the `--live` flag: it swaps which
-`extract` callable is bound, and transform and load are untouched.
-
-WHAT A RUN PRODUCES
-    Rows in the DuckDB store, and nothing else by default. The dashboard reads
-    that store live, so it is up to date the moment a run finishes and there is
-    no artefact to regenerate:
-
-        python -m ETL_Analysis.pipeline --dashboard   # run, then open it
-        python -m ETL_Analysis.dashboard              # open it on its own
-
-    `--legacy-report` additionally writes the self-contained `report.html`.
-    That path is unchanged and still supported: a served dashboard cannot be
-    committed to the repository, and the sprint asks for an artefact that opens
-    on a machine with no network.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -50,23 +21,8 @@ def run(symbols: list[str], extract_fn=None, show_rows: int | None = None,
         report_path: str | None = None,
         inline_js: bool = True,
         interval: str | None = None) -> int:
-    """Run the pipeline over `symbols`. Returns a process exit code.
-
-    `extract_fn` is injected so the live client can be substituted without
-    touching transform or load.
-
-    `report_path` is None by default: the dashboard reads the store directly,
-    so a run has nothing to render. Pass a path to also write the legacy
-    self-contained HTML report.
-
-    `interval` is passed to extract as a request parameter. Rows are stamped
-    with the granularity the response actually carried, not the one asked
-    for, so a request the API declines is visible in the store rather than
-    mislabelled.
-    """
     extract_fn = extract_fn or extract_fixtures.extract
 
-    # --- EXTRACT ---------------------------------------------------------
     payloads = []
     failures = []
     for symbol in symbols:
@@ -75,7 +31,7 @@ def run(symbols: list[str], extract_fn=None, show_rows: int | None = None,
                      f" ({interval})" if interval else "")
             payloads.append(extract_fn(symbol, interval=interval)
                             if interval else extract_fn(symbol))
-        except Exception as exc:  # noqa: BLE001 - reported per symbol, run continues
+        except Exception as exc:
             log.error("extract failed for %s: %s", symbol, exc)
             failures.append((symbol, str(exc)))
 
@@ -83,11 +39,9 @@ def run(symbols: list[str], extract_fn=None, show_rows: int | None = None,
         log.error("no payloads extracted; nothing to transform")
         return 1
 
-    # --- TRANSFORM -------------------------------------------------------
     log.info("transform: %d payload(s) (repair=%s)", len(payloads), repair)
     results = transform_module.transform_many(payloads, repair=repair)
 
-    # --- LOAD ------------------------------------------------------------
     if to_console:
         log.info("load: %d result(s) -> console", len(results))
         totals = load_print_module.load_many(results, show_rows=show_rows)
@@ -99,10 +53,6 @@ def run(symbols: list[str], extract_fn=None, show_rows: int | None = None,
             log.error("%s", exc)
             return 1
 
-    # --- LEGACY REPORT ---------------------------------------------------
-    # Not an ETL step, and not the default: the dashboard reads the store
-    # rather than a rendered file. Written after the load, so the report only
-    # ever describes data that actually landed.
     if report_path:
         try:
             written = report_module.write_report(
@@ -152,8 +102,6 @@ def _report(totals: dict, failures: list) -> None:
     if totals.get("metrics_written"):
         print(f"  metrics stored ..... {totals['metrics_written']}")
     if totals.get("db_path"):
-        # The dashboard reads the store, so it is already showing this run --
-        # there is nothing to regenerate, only something to open.
         command = "python -m ETL_Analysis.dashboard"
         if totals["db_path"] != load_module.DEFAULT_DB_PATH:
             command += f" --db {totals['db_path']}"
@@ -227,9 +175,6 @@ def main(argv: list[str] | None = None) -> int:
         format="%(levelname)-7s %(name)s: %(message)s",
     )
 
-    # --- decide the symbol list -----------------------------------------
-    # Two cases, and no third. Either you named the symbols, or the universe
-    # file is used in full.
     if args.list_symbols:
         universe = symbols_module.load_symbol_file(args.symbol_file)
         grouped = symbols_module.group_by_exchange(universe)
@@ -244,7 +189,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.symbols:
         symbol_list = args.symbols
     elif args.live:
-        # No symbols named: pull the whole universe file.
         symbol_list = symbols_module.filter_symbols(
             symbols_module.load_symbol_file(args.symbol_file),
             exchanges=args.exchanges, limit=args.limit,
@@ -264,20 +208,16 @@ def main(argv: list[str] | None = None) -> int:
                  f"; {plan['remaining']} request(s) left today"
                  if plan["remaining"] is not None else "")
     else:
-        # Offline: the fixtures are the only symbols there are.
         symbol_list = DEFAULT_SYMBOLS
 
     extract_fn = None
     if args.live:
         try:
-            from .extract_live import extract as extract_fn  # noqa: F401
+            from .extract_live import extract as extract_fn
         except ImportError as exc:
             log.error("--live needs extract_live.py with a real key: %s", exc)
             return 1
 
-    # --legacy-report          -> the default path
-    # --legacy-report out/x.html -> that path
-    # omitted                  -> no report; the dashboard reads the store
     if args.legacy_report is True:
         report_path = report_module.DEFAULT_REPORT_PATH
     elif args.legacy_report:
@@ -290,9 +230,6 @@ def main(argv: list[str] | None = None) -> int:
                     to_console=args.to_console, report_path=report_path,
                     inline_js=not args.cdn_js, interval=args.interval)
 
-    # --- claims ----------------------------------------------------------
-    # Written after the load, from the store, so the document describes the
-    # data that actually landed rather than the run that was attempted.
     if exit_code == 0 and args.claims and not args.to_console:
         from . import claims as claims_module
         from . import store as store_module

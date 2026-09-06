@@ -1,18 +1,3 @@
-"""Tests over the generated business claims.
-
-The claims are computed, not written, so these tests are not about whether a
-sentence still matches a number -- there is no written number to match. They
-are about whether the generator can be trusted:
-
-  - it reads only rows a claim may rest on;
-  - it derives its own periods and universe from the store rather than naming
-    them, so a different pull produces different claims;
-  - it refuses to make a claim the data cannot support, and says why;
-  - the figures it puts in the sentence are the figures it computed;
-  - `claims.md` is rendered by the same code the dashboard renders, so the
-    document and the page cannot disagree.
-"""
-
 from __future__ import annotations
 
 import re
@@ -27,35 +12,21 @@ from ETL_Analysis import store as S
 from ETL_Analysis import transform as T
 
 
-# ---------------------------------------------------------------------------
-# What the queries are allowed to read. No database needed.
-# ---------------------------------------------------------------------------
-
 CLAIM_QUERIES = ("QUARTER_STATS_SQL", "RECOVERY_SQL", "REGIME_SQL",
                  "COVERAGE_SQL")
 
 
 def test_no_claim_query_reads_a_vendor_interpolated_row():
-    """The rule, asserted on every query rather than remembered.
-
-    An interpolated candle is a number nobody traded at. On a dual-listed name
-    those rows sit a median 3.8% from the other venue's print for the same day,
-    so a claim including them would describe the vendor's filler.
-    """
     for name in CLAIM_QUERIES:
         assert "NOT d.synthetic" in getattr(C, name), name
 
 
 def test_the_universe_keeps_one_listing_per_company():
-    """A dual-listed company is one business. Counting both listings would
-    weight it double in every median and decile."""
     assert "primary_listing" in C._UNIVERSE
     assert "PARTITION BY root" in C._UNIVERSE
 
 
 def test_the_universe_is_derived_rather_than_named():
-    """No exchange, symbol count or interval is hard-coded, so the claims
-    describe whatever was actually pulled."""
     for token in ("'NSE'", "'BSE'", ">= 250", "'1d'"):
         assert token not in C._UNIVERSE, token
 
@@ -67,8 +38,6 @@ def test_every_claim_query_is_read_only():
 
 
 def test_the_data_quality_queries_are_where_interpolation_is_read():
-    """The interpolation finding is still measured -- it is the evidence for
-    the exclusion -- but it is reported as a data-quality fact."""
     assert "synthetic" in C.VENUE_DISAGREEMENT_SQL
     assert "synthetic" in C.INTERPOLATION_BY_QUARTER_SQL
 
@@ -80,33 +49,15 @@ def test_quarter_labels_convert_to_dates():
     assert C._quarter_end_exclusive("2026 Q4") == "2027-01-01"
 
 
-# ---------------------------------------------------------------------------
-# Against a store rich enough to support a claim.
-# ---------------------------------------------------------------------------
-
 duckdb = pytest.importorskip("duckdb", reason="the claims are computed in SQL")
 
 
-#: Kept deliberately small. The loader issues one DELETE per row to merge on
-#: the natural key, so a store an order of magnitude larger turns this module
-#: into a three-minute test. 25 symbols clears MIN_SYMBOLS and 14 days a
-#: quarter is enough for a standard deviation and a decile.
 SYNTHETIC_SYMBOLS = 25
 SYNTHETIC_DAYS_PER_QUARTER = 14
 
 
 def _synthetic_store(path, symbols=SYNTHETIC_SYMBOLS, quarters=5,
                      crash_quarter=2):
-    """A store with a deliberate selloff, so the generators have something to
-    find without depending on the real warehouse being present.
-
-    Dates are placed inside real calendar quarters rather than counted
-    forward, because the generators bucket on year and quarter and would
-    otherwise see fewer periods than intended.
-
-    Loaded through the real loader, so the rows go through the same schema and
-    the same merge the pipeline uses.
-    """
     results = []
     for index in range(symbols):
         name = f"SYM{index:03d}.NS"
@@ -116,8 +67,6 @@ def _synthetic_store(path, symbols=SYNTHETIC_SYMBOLS, quarters=5,
             first_of_quarter = date(2025 + quarter // 4,
                                     (quarter % 4) * 3 + 1, 1)
             for day in range(SYNTHETIC_DAYS_PER_QUARTER):
-                # Everything falls together in the crash quarter; afterwards
-                # the names fan out, some recovering far more than others.
                 if quarter == crash_quarter:
                     drift = -0.020 + (index % 5) * 0.0005
                 elif quarter > crash_quarter:
@@ -161,7 +110,6 @@ def findings(rich):
 
 
 def test_the_context_finds_the_selloff_without_being_told(rich):
-    """The pivot every claim turns on is discovered, not named."""
     context = C.market_context(rich)
     assert context["selloff"] is not None
     assert float(context["selloff"]["median_return_pct"]) < 0
@@ -176,14 +124,11 @@ def test_every_claim_is_supported_on_a_rich_store(findings):
 
 
 def test_every_claim_names_a_magnitude(findings):
-    """A sentence with no number in it is describing a picture."""
     for finding in findings:
         assert re.search(r"\d", finding.headline), finding.id
 
 
 def test_the_headline_is_built_from_the_measures_it_reports(findings):
-    """The point of generating: the sentence and the measures are the same
-    numbers, so they cannot disagree."""
     for finding in findings:
         quoted = {f"{abs(m.value):.2f}" for m in finding.measures
                   if m.value is not None}
@@ -220,7 +165,6 @@ def test_claim_ids_are_unique(findings):
 
 
 def test_the_quarter_table_matches_what_the_charts_expect(rich):
-    """The bug this pins: a chart reading a column the SQL stopped emitting."""
     from ETL_Analysis import charts
 
     rows = S.records(rich, C._sql(C.QUARTER_STATS_SQL))
@@ -231,12 +175,7 @@ def test_the_quarter_table_matches_what_the_charts_expect(rich):
         assert figure and figure["data"], builder.__name__
 
 
-# ---------------------------------------------------------------------------
-# The claims change when the data does. This is the whole point.
-# ---------------------------------------------------------------------------
-
 def test_a_different_store_produces_different_claims(tmp_path):
-    """Generated, not written: move the crash and the sentences move with it."""
     early = _synthetic_store(tmp_path / "early.duckdb", crash_quarter=1)
     late = _synthetic_store(tmp_path / "late.duckdb", crash_quarter=3)
 
@@ -260,14 +199,8 @@ def test_the_selloff_quarter_named_in_the_claim_is_the_one_in_the_data(
     assert any(quarter in f.headline for f in findings if f.available)
 
 
-# ---------------------------------------------------------------------------
-# A store that cannot support a claim says so.
-# ---------------------------------------------------------------------------
-
 @pytest.fixture(scope="module")
 def thin_store(tmp_path_factory):
-    """Three fixture symbols over two weeks: far too little for a market
-    claim, and exactly what a first offline run produces."""
     path = tmp_path_factory.mktemp("thin") / "w.duckdb"
     payloads, _ = E.extract_many(["RELIANCE.NS", "INFY.NS", "TATASTEEL.BO"])
     L.load_many(T.transform_many(payloads, repair=True), db_path=str(path))
@@ -282,7 +215,6 @@ def test_a_thin_store_yields_no_claims_rather_than_bad_ones(thin_store):
 
 
 def test_an_unsupported_claim_says_why(thin_store):
-    """'Not enough data' is an answer. Silence is not."""
     with S.connect(thin_store) as handle:
         for finding in C.generate(handle):
             assert finding.reason, finding.id
@@ -298,12 +230,8 @@ def test_the_reason_counts_correctly_in_the_singular(thin_store):
 
 def test_generating_never_raises_on_a_store_it_cannot_use(thin_store):
     with S.connect(thin_store) as handle:
-        C.generate(handle)  # the assertion is that this returns at all
+        C.generate(handle)
 
-
-# ---------------------------------------------------------------------------
-# claims.md
-# ---------------------------------------------------------------------------
 
 def test_the_document_is_rendered_from_the_generated_claims(rich, tmp_path):
     destination = tmp_path / "claims.md"
@@ -319,7 +247,6 @@ def test_the_document_is_rendered_from_the_generated_claims(rich, tmp_path):
 
 
 def test_the_document_says_it_is_generated(rich, tmp_path):
-    """So nobody edits a figure into it by hand and expects it to survive."""
     destination = tmp_path / "claims.md"
     C.write_markdown(rich, str(destination), "w.duckdb")
     text = destination.read_text(encoding="utf-8")
@@ -328,7 +255,6 @@ def test_the_document_says_it_is_generated(rich, tmp_path):
 
 
 def test_the_document_names_the_entry_point(rich, tmp_path):
-    """The sprint asks for this note at the bottom of claims.md by name."""
     destination = tmp_path / "claims.md"
     C.write_markdown(rich, str(destination), "w.duckdb")
     text = re.sub(r"\s+", " ", destination.read_text(encoding="utf-8"))
@@ -345,8 +271,6 @@ def test_the_document_carries_the_disclaimer(rich, tmp_path):
 
 def test_the_document_reports_unsupported_claims_rather_than_omitting_them(
         thin_store, tmp_path):
-    """A thin store must look visibly thin, not look like there was nothing
-    worth saying."""
     destination = tmp_path / "claims.md"
     with S.connect(thin_store) as handle:
         C.write_markdown(handle, str(destination), "w.duckdb")
@@ -356,7 +280,6 @@ def test_the_document_reports_unsupported_claims_rather_than_omitting_them(
 
 
 def test_regenerating_over_the_same_store_is_stable(rich):
-    """Two runs, one store, one document -- the timestamp aside."""
     stamp = datetime(2026, 9, 6, 12, 0)
     first = C.render_markdown(C.generate(rich), "w.duckdb", stamp)
     second = C.render_markdown(C.generate(rich), "w.duckdb", stamp)

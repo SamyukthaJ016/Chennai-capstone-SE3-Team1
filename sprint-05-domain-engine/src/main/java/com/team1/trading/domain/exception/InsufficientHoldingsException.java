@@ -2,12 +2,6 @@ package com.team1.trading.domain.exception;
 
 import java.math.BigDecimal;
 
-/**
- * Rule 7, ORD-409: a sell is larger than the quantity held.
- *
- * Shares its code with DuplicateOrderException. Both are conflicts with state
- * the server already holds, which is the catalogue working as intended.
- */
 public class InsufficientHoldingsException extends DomainException {
 
     public static final String CODE = "ORD-409";

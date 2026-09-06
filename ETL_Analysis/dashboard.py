@@ -1,43 +1,3 @@
-"""Dashboard: the live view of the analytical store.
-
-Replaces the one-shot HTML report as the pipeline's front end. The difference
-that matters is not that it is prettier -- the report described the run that
-wrote it, and this describes the STORE, so it is current the moment a run
-finishes without anything having to regenerate it. Every panel is a query
-against `warehouse.duckdb`, and the SQL console is there for the question the
-panels do not answer.
-
-    python -m ETL_Analysis.dashboard                  # launch it
-    python -m ETL_Analysis.dashboard --db my.duckdb   # a different store
-    python -m ETL_Analysis.pipeline --dashboard       # run, then launch
-
-`report.py` is still there and still works, behind the pipeline's
-`--legacy-report` flag: a served page is not a committed artefact, and the
-sprint asks for one of those too.
-
-HOW IT STAYS CURRENT
-    Reads are cached against `store.store_stamp` -- the store's path, mtime
-    and size. A pipeline run changes the file, so the next page render misses
-    the cache and re-reads; nothing else does. That is what makes "updates on
-    every run" true without polling and without a stale window.
-
-    Connections are opened per read and closed immediately. DuckDB allows many
-    readers or one writer, so a dashboard that held the file open would block
-    the next run from writing to it.
-
-WHAT IS COMPUTED WHERE
-    Nothing is aggregated here. Rows come out of `store`, `transform` computes
-    the measures over them, `charts` builds the figures. This module decides
-    layout and nothing else, so a number on screen is one the transform tests
-    already cover.
-
-DESIGN
-    One filter rail on the left, scoping every tab the same way. Figures come
-    from `charts.py` and its validated colour-blind-safe palette, every chart
-    has the table it was drawn from beside it, and both axes are titled on
-    every figure.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -47,12 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-# `streamlit run` executes this file as a script rather than importing it as
-# part of the package, so there is no package context for a relative import to
-# resolve against. Absolute imports, with the project root put on the path when
-# it is missing, work under `streamlit run`, under `python -m`, and under
-# `import ETL_Analysis.dashboard` alike.
-if __package__ in (None, ""):  # pragma: no cover - only under `streamlit run`
+if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ETL_Analysis import charts, claims as claims_module, store
@@ -62,30 +17,12 @@ from ETL_Analysis import transform as transform_module
 APP_TITLE = "Market data pipeline"
 DEFAULT_DB_PATH = store.DEFAULT_DB_PATH
 
-#: Symbols charted in the disposition bar before it stops being one screen.
 MAX_DISPOSITION_BARS = 40
 
-# --- Cache policy ----------------------------------------------------------
-# Reads are keyed on the store's stamp, so a pipeline run invalidates them.
-# Two things that key alone does not solve, and these constants do:
-#
-# ENTRIES -- the key also includes the filter selection, and there are 2^144
-#   symbol selections. Every distinct one would otherwise retain its own copy
-#   of the rows forever; a full-universe slice pickles to about 6.4MB, so a
-#   handful of filter changes is tens of megabytes held for good. The slice
-#   cache is therefore deliberately small: re-reading the store takes about a
-#   second, and holding twenty of them does not.
-#
-# TTL -- the stamp is (path, mtime, size). A write that changes neither -- same
-#   size, inside one filesystem timestamp tick -- would go unnoticed until the
-#   reader pressed Reload. The TTL bounds how long that can last without
-#   anyone having to know it is a possibility.
 SLICE_CACHE_ENTRIES = 4
 LIGHT_CACHE_ENTRIES = 32
 CACHE_TTL_SECONDS = 300
 
-#: Queries offered in the console, as (title, sql). Written to be read as much
-#: as run: each one demonstrates a column or an invariant worth knowing about.
 EXAMPLE_QUERIES = [
     ("What landed, per symbol", """SELECT symbol,
        count(*)        AS trading_days,
@@ -134,23 +71,10 @@ SELECT run_id, symbol, candles_in, rows_kept, rows_quarantined
  ORDER BY loaded_at DESC"""),
 ]
 
-
-# ---------------------------------------------------------------------------
-# Presentation helpers. Pure: values in, strings out, no streamlit -- so the
-# numbers the page shows can be asserted without rendering a page.
-# ---------------------------------------------------------------------------
-
 def format_value(value, unit: str) -> str:
-    """Render a measure for display.
-
-    Delegates to the report's formatter, so a number is written the same way
-    wherever it appears and there is one place to change it.
-    """
     return report_module.format_value(value, unit)
 
-
 def compact(value, unit: str = "") -> str:
-    """A figure for a stat tile: 12,904 stays; 1,290,400 becomes 1.29m."""
     if value is None:
         return "-"
     number = float(value)
@@ -161,18 +85,14 @@ def compact(value, unit: str = "") -> str:
             return f"{number / cutoff:,.2f}{suffix}"
     return f"{number:,.0f}"
 
-
 def date_span(lo, hi) -> str:
-    """A period, written the shortest way that stays unambiguous."""
     if not lo or not hi:
         return "-"
     if lo.year == hi.year:
         return f"{lo:%d %b} - {hi:%d %b %Y}"
     return f"{lo:%d %b %Y} - {hi:%d %b %Y}"
 
-
 def totals_for(results: list[dict]) -> dict:
-    """Roll a set of results up into the figures the stat strip shows."""
     loaded = sum(r["summary"]["rows_kept"] for r in results)
     repaired = sum(r["summary"].get("rows_repaired", 0) for r in results)
     dates = [r["summary"][key] for r in results
@@ -193,9 +113,7 @@ def totals_for(results: list[dict]) -> dict:
         "decliners": sum(1 for value in returns if value < 0),
     }
 
-
 def leaderboard_rows(results: list[dict]) -> list[dict]:
-    """Every symbol, ranked by return. Charts are capped; this is not."""
     ranked = sorted(
         [r for r in results if r["rows"]],
         key=lambda r: r["summary"].get("period_return_pct") or 0.0,
@@ -213,9 +131,7 @@ def leaderboard_rows(results: list[dict]) -> list[dict]:
         "Quarantined": r["summary"].get("rows_quarantined", 0),
     } for r in ranked]
 
-
 def price_table_rows(result: dict) -> list[dict]:
-    """The rows behind a symbol's charts -- the table view every figure needs."""
     return [{
         "Date": row["date"],
         "Open": row["open"],
@@ -229,9 +145,7 @@ def price_table_rows(result: dict) -> list[dict]:
         "Repaired": row["repaired"],
     } for row in result["rows"]]
 
-
 def repair_table_rows(results: list[dict]) -> list[dict]:
-    """One row per repair, not per repaired row: a row can carry two."""
     return [{
         "Symbol": row["symbol"],
         "Date": row["date"],
@@ -240,9 +154,7 @@ def repair_table_rows(results: list[dict]) -> list[dict]:
     } for result in results for row in result["rows"] if row["repaired"]
         for entry in row["repairs"]]
 
-
 def quarantine_table_rows(results: list[dict]) -> list[dict]:
-    """Every rejected candle, with the date exactly as it arrived."""
     return [{
         "Symbol": bad["symbol"],
         "Date as received": (bad["candle"].get("date")
@@ -251,58 +163,27 @@ def quarantine_table_rows(results: list[dict]) -> list[dict]:
         "Detail": bad["detail"],
     } for result in results for bad in result["quarantined"]]
 
-
 def measure_cards(result: dict) -> list[dict]:
-    """The measures for one symbol, as label/value pairs ready to render.
-
-    Row counts are dropped: they are dispositions rather than measures, and
-    the data-quality tab is where they belong.
-    """
     return [{"metric": m["metric"],
              "label": m["label"],
              "value": format_value(m["value"], m["unit"])}
             for m in transform_module.metrics(result)
             if m["unit"] != "rows"]
 
-
 def plotly_available() -> bool:
-    """Whether charts can be drawn.
-
-    `st.plotly_chart` reaches for `plotly.tools`, so a missing plotly surfaces
-    as a traceback in the middle of the page rather than as a message. The
-    page checks first and says what to install -- and keeps going, because
-    every chart here has a table beside it carrying the same numbers, so a
-    dashboard without plotly is degraded rather than useless.
-    """
     try:
-        import plotly.tools  # noqa: F401
+        import plotly.tools
         return True
-    except Exception:  # noqa: BLE001 - absent, or a stub without the submodule
+    except Exception:
         return False
-
 
 PLOTLY_MISSING_NOTE = (
     "Charts need plotly, which is not installed: `pip install plotly`. "
     "Every table on this page carries the same numbers in the meantime."
 )
 
-
 def run_pipeline_from_app(db_path: str, symbols: list, interval: str | None,
                           live: bool = False) -> dict:
-    """Run the pipeline into `db_path` and report what happened.
-
-    Kept out of the page so it can be tested without rendering one, and so
-    the UI has nothing to do but show the sentence this returns.
-
-    Every failure is caught and described. A run started from a button has no
-    console to print a traceback to, and a page that dies mid-render tells the
-    reader nothing about whether their data landed.
-
-    `pipeline` is imported here rather than at module scope on purpose: it
-    imports this module for its own `--dashboard` flag, and a cycle that
-    resolves only because of the order the two happen to be imported in is a
-    trap for whoever edits the imports next.
-    """
     from ETL_Analysis import pipeline as pipeline_module
 
     symbols = [s.strip() for s in symbols if s.strip()]
@@ -312,7 +193,7 @@ def run_pipeline_from_app(db_path: str, symbols: list, interval: str | None,
     extract_fn = None
     if live:
         try:
-            from .extract_live import extract as extract_fn  # noqa: F401
+            from .extract_live import extract as extract_fn
         except ImportError as exc:
             return {"ok": False,
                     "message": f"The live client is unavailable: {exc}"}
@@ -320,7 +201,7 @@ def run_pipeline_from_app(db_path: str, symbols: list, interval: str | None,
     try:
         code = pipeline_module.run(symbols, extract_fn=extract_fn,
                                    db_path=db_path, interval=interval)
-    except Exception as exc:  # noqa: BLE001 - a button has no stderr
+    except Exception as exc:
         return {"ok": False, "message": f"The run failed: {exc}"}
 
     if code != 0:
@@ -332,20 +213,12 @@ def run_pipeline_from_app(db_path: str, symbols: list, interval: str | None,
             "message": (f"Loaded {len(symbols)} symbol(s){asked}. "
                         f"The page is showing the new data.")}
 
-
 def default_run_symbols() -> list:
-    """What to prefill the run form with. Lazy for the same cycle reason."""
     from ETL_Analysis import pipeline as pipeline_module
     return list(pipeline_module.DEFAULT_SYMBOLS)
 
-
 def _escape(text) -> str:
     return html_module.escape(str(text), quote=True)
-
-
-# ---------------------------------------------------------------------------
-# Chrome
-# ---------------------------------------------------------------------------
 
 CSS = """
 <style>
@@ -362,7 +235,6 @@ CSS = """
   html, body, [class*="st-"], .stMarkdown { color: var(--ink);
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
 
-  /* Masthead */
   .masthead { border-bottom: 1px solid var(--line); padding-bottom: 13px; }
   .masthead h1 { font-size: 21px; font-weight: 620; letter-spacing: -0.012em;
                  margin: 0 0 6px; }
@@ -371,7 +243,6 @@ CSS = """
       padding: 1px 6px; border-radius: 3px; font-size: 11.5px; font-family: var(--mono); }
   .sep { color: #c3c2b7; padding: 0 9px; }
 
-  /* Stat strip */
   .stats { display: flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--line);
            border-radius: 5px; background: var(--surface); margin: 18px 0 2px; }
   .stat { flex: 1 1 132px; padding: 13px 18px; border-right: 1px solid var(--line); }
@@ -386,7 +257,6 @@ CSS = """
   .stat .v.bad { color: var(--bad); }
   .stat .sub { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
 
-  /* Sections */
   .sec { font-size: 10.5px; font-weight: 650; letter-spacing: .1em;
          text-transform: uppercase; color: var(--muted);
          border-bottom: 1px solid var(--line); padding-bottom: 6px;
@@ -396,7 +266,6 @@ CSS = """
   .foot { font-size: 11.5px; color: var(--muted); margin: 6px 0 0;
           max-width: 92ch; line-height: 1.5; }
 
-  /* Measures grid */
   .measures { display: grid; gap: 1px; background: var(--line);
               border: 1px solid var(--line); border-radius: 5px; overflow: hidden;
               grid-template-columns: repeat(auto-fill, minmax(172px, 1fr)); }
@@ -405,19 +274,16 @@ CSS = """
                 margin-bottom: 3px; line-height: 1.35; }
   .measure .v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
-  /* Pills */
   .pill { display: inline-block; padding: 2px 9px; border-radius: 3px;
           font-size: 11px; font-weight: 600; }
   .pill.ok { background: #e6f5e6; color: #0a6b0a; border: 1px solid #c6e8c6; }
   .pill.bad { background: #fbe9e9; color: #9c1f1f; border: 1px solid #f2cccc; }
 
-  /* Tabs */
   .stTabs [data-baseweb="tab-list"] { gap: 2px; border-bottom: 1px solid var(--line); }
   .stTabs [data-baseweb="tab"] { height: 40px; padding: 0 16px; font-size: 13.5px;
       font-weight: 550; color: var(--ink-2); background: transparent; }
   .stTabs [aria-selected="true"] { color: var(--ink); box-shadow: inset 0 -2px 0 var(--ink); }
 
-  /* Rail */
   section[data-testid="stSidebar"] { background: var(--surface);
       border-right: 1px solid var(--line); }
   .railhead { font-size: 10.5px; font-weight: 650; letter-spacing: .1em;
@@ -425,7 +291,6 @@ CSS = """
               border-bottom: 1px solid var(--line); padding-bottom: 6px;
               margin: 18px 0 10px; }
 
-  /* Tables & schema */
   [data-testid="stDataFrame"] { border: 1px solid var(--line); border-radius: 5px; }
   .schema { font-family: var(--mono); font-size: 11.5px; line-height: 1.7;
             color: var(--ink-2); }
@@ -434,27 +299,17 @@ CSS = """
 </style>
 """
 
-
 def stat_tile(key: str, value: str, sub: str = "", tone: str = "",
               small: bool = False) -> str:
-    """One cell of the stat strip.
-
-    Values use proportional figures rather than tabular: equal-width digits
-    make a large standalone number look loose. Tabular figures are for the
-    tables and the measures grid, where digits line up vertically.
-    """
     classes = " ".join(filter(None, ["v", "sm" if small else "", tone]))
     sub_html = f'<div class="sub">{_escape(sub)}</div>' if sub else ""
     return (f'<div class="stat"><span class="k">{_escape(key)}</span>'
             f'<div class="{classes}">{_escape(value)}</div>{sub_html}</div>')
 
-
 def stat_strip(tiles: list[str]) -> str:
     return f'<div class="stats">{"".join(tiles)}</div>'
 
-
 def masthead(path: str, run_id: str | None, loaded_at, note: str = "") -> str:
-    """The one line that says which store, which run, and when."""
     when = f"{loaded_at:%d %b %Y, %H:%M}" if loaded_at else "never"
     parts = [
         f'<code>{_escape(path)}</code>',
@@ -466,14 +321,7 @@ def masthead(path: str, run_id: str | None, loaded_at, note: str = "") -> str:
     return (f'<div class="masthead"><h1>{_escape(APP_TITLE)}</h1>'
             f'<div class="meta">{body}</div>{extra}</div>')
 
-
-# ---------------------------------------------------------------------------
-# The app. Everything below needs streamlit, which is imported inside the
-# function so the helpers above stay importable -- and testable -- without it.
-# ---------------------------------------------------------------------------
-
 def run_app(db_path: str = DEFAULT_DB_PATH) -> None:
-    """Render the whole dashboard. Called only under `streamlit run`."""
     import pandas as pd
     import streamlit as st
 
@@ -484,7 +332,6 @@ def run_app(db_path: str = DEFAULT_DB_PATH) -> None:
     can_chart = plotly_available()
 
     def chart(figure, empty: str = "Nothing to chart in the current scope."):
-        """Draw a figure, or say why there is nothing to look at."""
         if figure is None:
             st.info(empty)
         elif not can_chart:
@@ -492,15 +339,6 @@ def run_app(db_path: str = DEFAULT_DB_PATH) -> None:
         else:
             st.plotly_chart(figure, use_container_width=True,
                             config=charts.PLOTLY_CONFIG)
-
-    # --- cached reads ---------------------------------------------------
-    # Keyed on the store's stamp, so a pipeline run invalidates all of them
-    # and nothing else does. `stamp` deliberately has no leading underscore:
-    # streamlit excludes underscore-prefixed arguments from the cache key, and
-    # this is the argument the whole scheme depends on.
-    #
-    # Each function opens and closes the store itself. Caching a connection
-    # instead would hold DuckDB's single-writer lock and block the next run.
 
     @st.cache_data(max_entries=LIGHT_CACHE_ENTRIES, ttl=CACHE_TTL_SECONDS,
                    show_spinner=False)
@@ -533,10 +371,6 @@ def run_app(db_path: str = DEFAULT_DB_PATH) -> None:
                 exclude_repaired=no_repaired, exclude_synthetic=no_synthetic,
                 interval=interval)
             bad = store.quarantine_records(handle, symbols=list(symbols))
-        # No `candles_in` from the ledger: these rows are a filtered subset,
-        # so the honest denominator is what is in hand rather than what some
-        # past run received. Reconciliation is checked against the ledger
-        # separately, where that comparison does mean something.
         return store.build_results(prices, bad)
 
     @st.cache_data(max_entries=LIGHT_CACHE_ENTRIES, ttl=CACHE_TTL_SECONDS,
@@ -561,13 +395,6 @@ def run_app(db_path: str = DEFAULT_DB_PATH) -> None:
     @st.cache_data(max_entries=LIGHT_CACHE_ENTRIES, ttl=CACHE_TTL_SECONDS,
                    show_spinner="Working out the claims")
     def read_claims(path: str, stamp: tuple) -> dict:
-        """Generate the claims from the store, and fetch the data-quality
-        tables that justify what they exclude.
-
-        Keyed on the store stamp like every other read, so a pipeline run
-        re-derives the claims rather than leaving the previous run's sentences
-        on screen under new data.
-        """
         with store.connect(path) as handle:
             return {
                 "findings": claims_module.generate(handle),
@@ -583,17 +410,9 @@ def run_app(db_path: str = DEFAULT_DB_PATH) -> None:
                read_metric_history, read_claims)
 
     def refresh() -> None:
-        """Drop this app's cached reads, and nothing else.
-
-        `st.cache_data.clear()` would empty every cached function in the
-        process, including any other app sharing it. Clearing the readers by
-        name keeps the blast radius to this page, and is what both the Reload
-        button and a pipeline run triggered from the app call.
-        """
         for reader in readers:
             reader.clear()
 
-    # --- the filter rail, scoping every tab the same way -----------------
     with st.sidebar:
         st.markdown('<div class="railhead">Store</div>', unsafe_allow_html=True)
         path = st.text_input("DuckDB file", value=db_path,
@@ -613,10 +432,6 @@ def run_app(db_path: str = DEFAULT_DB_PATH) -> None:
                        "`python -m ETL_Analysis.pipeline` first.")
             st.stop()
 
-        # --- granularity -------------------------------------------------
-        # Picked before anything else, because it decides which rows exist.
-        # A view that mixed a weekly candle with a daily one would be drawing
-        # two different measurements as one series.
         loaded_intervals = available.get("intervals") or []
         if len(loaded_intervals) > 1:
             interval = st.radio(
@@ -668,7 +483,6 @@ def run_app(db_path: str = DEFAULT_DB_PATH) -> None:
             help="Candles the provider flagged synthetic: interpolated by "
                  "them, not observed.")
 
-        # --- run the pipeline from here ----------------------------------
         st.markdown('<div class="railhead">Load more data</div>',
                     unsafe_allow_html=True)
         with st.form("run_pipeline"):
@@ -692,12 +506,7 @@ def run_app(db_path: str = DEFAULT_DB_PATH) -> None:
             outcome = run_pipeline_from_app(
                 path, run_symbols.split(), requested_interval.strip() or None,
                 live=go_live)
-            # The store has changed, so every cached read is now stale. This
-            # is the reason `refresh` clears by name rather than globally.
             refresh()
-            # Stashed rather than rendered here: `st.rerun` throws the current
-            # render away, and a message written before it is never seen. The
-            # next run picks it up below.
             st.session_state["run_outcome"] = outcome
             st.rerun()
 
@@ -759,9 +568,6 @@ def run_app(db_path: str = DEFAULT_DB_PATH) -> None:
         ["Overview", "Claims", "Instrument", "Data quality", "Runs",
          "SQL console"])
 
-    # =====================================================================
-    # Overview
-    # =====================================================================
     with overview_tab:
         if not results:
             st.info("No rows match the current scope. Widen the date range or "
@@ -824,9 +630,6 @@ def run_app(db_path: str = DEFAULT_DB_PATH) -> None:
                         unsafe_allow_html=True)
                 chart(disposition)
 
-    # =====================================================================
-    # Claims
-    # =====================================================================
     with claims_tab:
         checked = read_claims(path, stamp)
         findings = checked["findings"]
@@ -960,9 +763,6 @@ def run_app(db_path: str = DEFAULT_DB_PATH) -> None:
             'document and this page are the same code, so they cannot '
             'disagree.</p>', unsafe_allow_html=True)
 
-    # =====================================================================
-    # Instrument
-    # =====================================================================
     with instrument_tab:
         if not results:
             st.info("No rows match the current scope.")
@@ -994,8 +794,6 @@ def run_app(db_path: str = DEFAULT_DB_PATH) -> None:
                 stat_tile("Daily volatility",
                           format_value(s.get("volatility_pct"), "pct").lstrip("+"),
                           "std dev of daily returns"),
-                # A drawdown is never positive, so a leading "+" on a flat
-                # series reads as a gain that did not happen.
                 stat_tile("Max drawdown",
                           format_value(s.get("max_drawdown_pct"),
                                        "pct").lstrip("+"),
@@ -1055,9 +853,6 @@ def run_app(db_path: str = DEFAULT_DB_PATH) -> None:
                 file_name=f"{picked.replace('/', '-')}_daily_price.csv",
                 mime="text/csv")
 
-    # =====================================================================
-    # Data quality
-    # =====================================================================
     with quality_tab:
         st.markdown('<div class="sec">Reconciliation</div>',
                     unsafe_allow_html=True)
@@ -1170,9 +965,6 @@ def run_app(db_path: str = DEFAULT_DB_PATH) -> None:
             st.markdown('<p class="foot">Nothing in scope was repaired.</p>',
                         unsafe_allow_html=True)
 
-    # =====================================================================
-    # Runs
-    # =====================================================================
     with runs_tab:
         st.markdown('<div class="sec">Every load, newest first</div>',
                     unsafe_allow_html=True)
@@ -1216,9 +1008,6 @@ def run_app(db_path: str = DEFAULT_DB_PATH) -> None:
         else:
             st.info("No metrics stored yet.")
 
-    # =====================================================================
-    # SQL console
-    # =====================================================================
     with console_tab:
         editor, panel = st.columns([3, 1])
 
@@ -1260,7 +1049,7 @@ def run_app(db_path: str = DEFAULT_DB_PATH) -> None:
                         outcome = store.run_console_query(handle, sql)
                 except (store.UnsafeQuery, store.StoreUnavailable) as exc:
                     st.error(str(exc))
-                except Exception as exc:  # noqa: BLE001 - any DuckDB error
+                except Exception as exc:
                     st.error(f"DuckDB refused that query:\n\n{exc}")
                 else:
                     frame = pd.DataFrame(outcome["rows"],
@@ -1288,31 +1077,14 @@ def run_app(db_path: str = DEFAULT_DB_PATH) -> None:
         'rows in scope, and every chart has the table it was drawn from beside '
         'it.</p>', unsafe_allow_html=True)
 
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
-#: Set on the child so a misdetection can never spawn a second one. Without
-#: it, a `under_streamlit()` that answered False inside streamlit would fork
-#: an unbounded chain of servers, each waiting on the next.
 CHILD_ENV_VAR = "ETL_ANALYSIS_DASHBOARD_CHILD"
 
-
 def under_streamlit() -> bool:
-    """Whether this process is already running the app.
-
-    Asked two ways because they fail in different situations. A served app has
-    a streamlit Runtime; a test harness driving the script directly does not,
-    but every script run has a script-run context either way. Answering False
-    inside streamlit would make `main` shell out to a second streamlit, so the
-    check errs towards True.
-    """
     try:
         from streamlit.runtime import exists
         if exists():
             return True
-    except Exception:  # noqa: BLE001 - an old streamlit, or none at all
+    except Exception:
         pass
 
     for module_path in (
@@ -1323,19 +1095,12 @@ def under_streamlit() -> bool:
             module = __import__(module_path, fromlist=["get_script_run_ctx"])
             if module.get_script_run_ctx(suppress_warning=True) is not None:
                 return True
-        except Exception:  # noqa: BLE001 - the path moved between versions
+        except Exception:
             continue
     return False
 
-
 def launch_command(db_path: str = DEFAULT_DB_PATH, port: int | None = None,
                    headless: bool = False) -> list[str]:
-    """The `streamlit run` command line this module launches.
-
-    The theme is passed as flags rather than left to a config file, so the
-    dashboard looks the same whatever directory it is started from and
-    whatever the reader's own streamlit settings say.
-    """
     command = [
         sys.executable, "-m", "streamlit", "run",
         str(Path(__file__).resolve()),
@@ -1352,10 +1117,8 @@ def launch_command(db_path: str = DEFAULT_DB_PATH, port: int | None = None,
         command += ["--server.headless", "true"]
     return command + ["--", "--db", str(db_path)]
 
-
 def launch(db_path: str = DEFAULT_DB_PATH, port: int | None = None,
            headless: bool = False) -> int:
-    """Start the dashboard in a child process. Returns its exit code."""
     if os.environ.get(CHILD_ENV_VAR):
         print("Already inside a dashboard process; refusing to start another. "
               "Open the URL streamlit printed instead.", file=sys.stderr)
@@ -1363,7 +1126,6 @@ def launch(db_path: str = DEFAULT_DB_PATH, port: int | None = None,
     environment = dict(os.environ, **{CHILD_ENV_VAR: "1"})
     return subprocess.call(launch_command(db_path, port, headless),
                            env=environment)
-
 
 def parse_args(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(
@@ -1376,22 +1138,14 @@ def parse_args(argv: list[str] | None = None):
                         help="do not open a browser")
     return parser.parse_args(argv)
 
-
 def main(argv: list[str] | None = None) -> int:
-    """Render the page if we are inside streamlit, otherwise start streamlit."""
     args = parse_args(argv)
     if under_streamlit():
         run_app(args.db)
         return 0
     return launch(args.db, port=args.port, headless=args.headless)
 
-
 if __name__ == "__main__":
-    # Under `streamlit run` this file IS the page, and the run has to end by
-    # returning. `sys.exit` raises SystemExit up through streamlit's script
-    # runner, which then never completes the run -- the page renders nothing
-    # and the request hangs. An exit code is only meaningful on the CLI path,
-    # where this process is a launcher rather than the app.
     _code = main()
     if not under_streamlit():
         sys.exit(_code)

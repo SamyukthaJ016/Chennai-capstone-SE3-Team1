@@ -34,10 +34,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Business rules 1 to 8, each one firing and each one not firing, plus the
- * evaluation order itself.
- */
 class OrderLogicTest {
 
     private static final long ACCOUNT_ID = 1L;
@@ -96,8 +92,6 @@ class OrderLogicTest {
         return new PlaceOrderRequest(ACCOUNT_ID, SYMBOL, OrderSide.SELL, quantity, new BigDecimal(price), KEY);
     }
 
-    // ---------- rule 1 : the account must exist : ACC-404 ----------
-
     @Nested
     @DisplayName("Rule 1 - the account must exist")
     class Rule1Tests {
@@ -122,8 +116,6 @@ class OrderLogicTest {
             assertDoesNotThrow(() -> service.placeOrder(buy(10, "5.00")));
         }
     }
-
-    // ---------- rule 2 : the account must be ACTIVE : ACC-403 ----------
 
     @Nested
     @DisplayName("Rule 2 - the account must be ACTIVE")
@@ -161,8 +153,6 @@ class OrderLogicTest {
         }
     }
 
-    // ---------- rule 3 : the instrument must exist and be tradable : INS-404 ----------
-
     @Nested
     @DisplayName("Rule 3 - the instrument must exist and be tradable")
     class Rule3Tests {
@@ -199,8 +189,6 @@ class OrderLogicTest {
             assertDoesNotThrow(() -> service.placeOrder(buy(10, "5.00")));
         }
     }
-
-    // ---------- rule 4 : quantity greater than zero : VAL-422 ----------
 
     @Nested
     @DisplayName("Rule 4 - quantity must be greater than zero")
@@ -244,8 +232,6 @@ class OrderLogicTest {
         }
     }
 
-    // ---------- rule 5 : price greater than zero : VAL-422 ----------
-
     @Nested
     @DisplayName("Rule 5 - price must be greater than zero")
     class Rule5Tests {
@@ -288,8 +274,6 @@ class OrderLogicTest {
         }
     }
 
-    // ---------- rule 6 : a BUY needs the cash : ORD-400 ----------
-
     @Nested
     @DisplayName("Rule 6 - on a BUY the balance must cover quantity times price")
     class Rule6Tests {
@@ -325,8 +309,6 @@ class OrderLogicTest {
             assertDoesNotThrow(() -> service.placeOrder(sell(10, "5.00")));
         }
     }
-
-    // ---------- rule 7 : a SELL needs the holding : ORD-409 ----------
 
     @Nested
     @DisplayName("Rule 7 - on a SELL the held quantity must cover the order")
@@ -375,8 +357,6 @@ class OrderLogicTest {
         }
     }
 
-    // ---------- rule 8 : the idempotency key : ORD-409 ----------
-
     @Nested
     @DisplayName("Rule 8 - the idempotency key must not already have been used")
     class Rule8Tests {
@@ -424,8 +404,6 @@ class OrderLogicTest {
                     "a key already claimed must not be claimable a second time");
         }
     }
-
-    // ---------- the evaluation order itself ----------
 
     @Nested
     @DisplayName("Evaluation order - the first failure wins")
@@ -515,8 +493,6 @@ class OrderLogicTest {
                     () -> service.placeOrder(sell(1000, "5.00")));
         }
     }
-
-    // ---------- what an accepted order looks like ----------
 
     @Nested
     @DisplayName("An order that passes all eight rules")

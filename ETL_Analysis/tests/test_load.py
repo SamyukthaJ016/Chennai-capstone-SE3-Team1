@@ -1,23 +1,3 @@
-"""Tests over the load step.
-
-Two layers:
-
-  1. The pure shaping functions -- `exchange_for`, `date_key_for`,
-     `price_row`, `quarantine_row`, `run_row`. No database at all.
-
-  2. The real SQL, executed against a SQLite mirror. `ensure_schema`,
-     `write_result` and `reconcile` are run exactly as written, with the same
-     DDL file and the same statements the DuckDB path uses. SQLite and DuckDB
-     share the `?` placeholder style and accept the same ANSI DDL here, so
-     this exercises the load logic -- statement correctness, column-order
-     alignment, delete-then-insert idempotency -- without requiring duckdb to
-     be installed to run the suite.
-
-What layer 2 does NOT prove: DuckDB-specific type behaviour (DECIMAL
-precision, TIMESTAMP handling) and the `duckdb.connect` call itself. Run the
-pipeline against a real DuckDB file once to close that gap.
-"""
-
 from __future__ import annotations
 
 import json
@@ -30,10 +10,6 @@ from ETL_Analysis import load as L
 from ETL_Analysis import extract_fixtures as E
 from ETL_Analysis import transform as T
 
-
-# ---------------------------------------------------------------------------
-# A stand-in with the same execute / executemany / fetchall surface DuckDB has.
-# ---------------------------------------------------------------------------
 
 class SqliteMirror:
     def __init__(self):
@@ -74,10 +50,6 @@ def results():
     return T.transform_many(payloads, repair=True)
 
 
-# ---------------------------------------------------------------------------
-# Pure shaping functions
-# ---------------------------------------------------------------------------
-
 @pytest.mark.parametrize("symbol,expected", [
     ("RELIANCE.NS", "NSE"),
     ("INFY.NS", "NSE"),
@@ -87,7 +59,6 @@ def results():
     ("X:BTCUSD", "CRYPTO"),
 ])
 def test_exchange_is_derived_from_the_symbol_scheme(symbol, expected):
-    """The rule the analytics contract states for DIM_INSTRUMENT.exchange."""
     assert L.exchange_for(symbol) == expected
 
 
@@ -101,7 +72,6 @@ def test_date_key_is_yyyymmdd_matching_dim_date():
 
 
 def test_price_row_column_count_matches_the_insert_statement():
-    """A drift between tuple order and column list is silent and corrupting."""
     columns = L.INSERT_PRICE_SQL.count("?")
     row = {"symbol": "INFY.NS", "date": date(2026, 7, 1), "open": 1.0,
            "high": 2.0, "low": 0.5, "close": 1.5}
@@ -121,7 +91,6 @@ def test_run_row_column_count_matches_the_insert_statement(results):
 
 
 def _column_index(name: str) -> int:
-    """Where `name` sits in the INSERT_PRICE_SQL column list."""
     columns = L.INSERT_PRICE_SQL.split("(", 1)[1].split(")", 1)[0]
     return [c.strip().strip('"')
             for c in columns.split(",")].index(name)
@@ -131,15 +100,11 @@ def test_repairs_are_serialised_as_json(results):
     malformed = next(r for r in results if r["symbol"] == "TATASTEEL.BO")
     repaired = next(r for r in malformed["rows"] if r["repaired"])
     tuple_row = L.price_row(repaired, "run", datetime.now())
-    # Found by name rather than hard-coded: the tuple has to stay aligned with
-    # INSERT_PRICE_SQL, and an index literal silently rots the moment a column
-    # is added ahead of it -- which is exactly what adding `interval` did.
     parsed = json.loads(tuple_row[_column_index("repairs")])
     assert parsed and parsed[0]["code"].startswith("repair_")
 
 
 def test_quarantine_row_keeps_the_raw_date_as_text():
-    """A row rejected for a bad date has no valid date to key on."""
     bad = {"symbol": "X.BO", "reason": T.BAD_DATE_FORMAT, "detail": "d",
            "candle": {"date": "09/07/2026"}}
     assert L.quarantine_row(bad, "run", datetime.now())[2] == "09/07/2026"
@@ -148,10 +113,6 @@ def test_quarantine_row_keeps_the_raw_date_as_text():
 def test_run_ids_are_unique():
     assert L.new_run_id() != L.new_run_id()
 
-
-# ---------------------------------------------------------------------------
-# The real SQL, against the mirror
-# ---------------------------------------------------------------------------
 
 def test_schema_creates_the_four_tables(con):
     names = {r[0] for r in con.execute(
@@ -196,7 +157,6 @@ def test_rewriting_the_same_run_does_not_duplicate_metrics(con, results):
 
 
 def test_a_second_run_keeps_both_sets_of_metrics(con, results):
-    """Metrics are per run, so two runs can be compared."""
     L.write_result(con, results[0], "run-1")
     L.write_result(con, results[0], "run-2")
     runs = con.execute("SELECT DISTINCT run_id FROM run_metric").fetchall()
@@ -204,7 +164,7 @@ def test_a_second_run_keeps_both_sets_of_metrics(con, results):
 
 
 def test_ensure_schema_is_safe_to_run_twice(con):
-    L.ensure_schema(con)  # CREATE TABLE IF NOT EXISTS throughout
+    L.ensure_schema(con)
 
 
 def test_write_result_loads_clean_rows(con, results):
@@ -221,7 +181,6 @@ def test_write_result_loads_quarantined_rows(con, results):
 
 
 def test_a_rerun_does_not_double_count(con, results):
-    """The contract's requirement: merge on the natural key, never blind insert."""
     for result in results:
         L.write_result(con, result, "run-1")
     after_first = con.scalar("SELECT count(*) FROM daily_price")
@@ -241,8 +200,6 @@ def test_a_rerun_does_not_duplicate_quarantined_rows(con, results):
 
 
 def test_a_rerun_records_a_second_ledger_row(con, results):
-    """Prices are merged, but each run's ledger entry is kept: the ledger is
-    the history of loads, not the current state."""
     L.write_result(con, results[0], "run-1")
     L.write_result(con, results[0], "run-2")
     assert con.scalar("SELECT count(*) FROM load_run") == 2
@@ -255,8 +212,6 @@ def test_reconciliation_passes_for_a_healthy_load(con, results):
 
 
 def test_reconciliation_catches_a_lost_row(con):
-    """The check must actually fail when the invariant is broken, or it is
-    proving nothing."""
     con.execute(
         L.INSERT_RUN_SQL,
         ["run-x", "BROKEN.NS", True, 10, 4, 0, 3, None, None, None, None,
@@ -278,7 +233,6 @@ def test_loaded_row_carries_the_derived_exchange(con, results):
 
 
 def test_null_volume_survives_the_round_trip(con, results):
-    """A null volume must not become zero on the way into the store."""
     infy = next(r for r in results if r["symbol"] == "INFY.NS")
     L.write_result(con, infy, "run-1")
     nulls = con.execute(
@@ -296,7 +250,6 @@ def test_repaired_rows_are_flagged_in_the_store(con, results):
 
 
 def test_store_totals_match_the_transform_summary(con, results):
-    """What the transform said it kept is what the store actually holds."""
     for result in results:
         L.write_result(con, result, "run-1")
     expected = sum(r["summary"]["rows_kept"] for r in results)

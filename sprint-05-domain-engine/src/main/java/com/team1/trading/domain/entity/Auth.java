@@ -27,17 +27,14 @@ public class Auth {
         this.version = Objects.requireNonNull(version, "version must not be null");
     }
 
-
     public String getEmail() { return email; }
     public LocalDateTime getCreated() { return created; }
     public LocalDateTime getUpdated() { return updated; }
     public Integer getVersion() { return version; }
 
-
     public boolean authenticate(String candidateHash) {
         return this.passwordHash.equals(candidateHash);
     }
-
 
     public void changePassword(String newPasswordHash) {
         this.passwordHash = newPasswordHash;

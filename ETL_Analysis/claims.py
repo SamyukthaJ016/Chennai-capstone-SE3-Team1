@@ -1,60 +1,16 @@
-"""The business claims, generated from whatever the store actually holds.
-
-Nothing here is a written-down number. Each claim is a QUESTION with a fixed
-method -- which quarter was the selloff, how wide was the spread, did the
-volatility come back down -- and the sentence is assembled from the answer at
-the moment it is asked. Point the pipeline at different symbols, a different
-window or a different interval and the claims describe that data instead.
-
-WHY GENERATE RATHER THAN WRITE
-    A claim written once carries the figures that were true when it was
-    written, and every later run silently disagrees with it. Generating means
-    the sentence and the data cannot drift apart, because there is only one of
-    them. `claims.md` is rendered from this module for the same reason.
-
-    What stays fixed is the analyst's part: which questions are worth asking,
-    what the answer means for a desk, and what would prove it wrong. Those are
-    judgement, not arithmetic, so they are written here -- but even they take
-    the computed figures rather than repeating them.
-
-WHEN THERE IS NOT ENOUGH DATA
-    A three-symbol fixture store cannot support a claim about market breadth.
-    Generators say so and return `available = False` with the reason, rather
-    than emitting a confident sentence about twelve rows. An unsupported claim
-    is reported as unsupported; it is never quietly rounded into existence.
-
-NO CLAIM RESTS ON A NUMBER NOBODY TRADED AT
-    Every generator reads observed rows only -- `NOT synthetic` -- so no claim
-    is argued from a candle the vendor interpolated. On a dual-listed name
-    those rows sit a median 3.8% from the other venue's print for the same day,
-    so a claim including them would be a claim about the vendor's filler. The
-    interpolation rate is still measured, as a data-quality fact, on the Data
-    quality tab.
-
-    Claims are restricted to symbols with a full period of history, so a symbol
-    that joined the universe late cannot tilt a quarter it was absent for.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-#: A claim about "the market" needs enough names to have a distribution.
-#: Below this the deciles are a handful of symbols and mean nothing.
 MIN_SYMBOLS = 20
 
-#: Before/after comparisons need a quarter on each side of the pivot.
 MIN_QUARTERS = 3
 
-#: Rows a symbol needs to count as having the full period. Expressed as a
-#: share of the busiest symbol rather than an absolute, so it holds whether
-#: the store has a year of dailies or a decade of monthlies.
 FULL_HISTORY_SHARE = 0.95
 
 
 @dataclass(frozen=True)
 class Measure:
-    """One computed figure, ready to render."""
 
     label: str
     value: float | None
@@ -63,12 +19,6 @@ class Measure:
 
 @dataclass(frozen=True)
 class Finding:
-    """A generated claim, or a stated reason there is not one.
-
-    `available` False means the store cannot support this question. The title
-    and reason are still filled in, so the page can say which claim is missing
-    and why instead of silently showing two where there should be three.
-    """
 
     id: str
     title: str
@@ -84,19 +34,6 @@ class Finding:
     table: list = field(default_factory=list)
 
 
-# ---------------------------------------------------------------------------
-# The row set every claim is argued from, and the shape they read.
-# ---------------------------------------------------------------------------
-
-#: The universe every claim is made over: one listing per company, with the
-#: full period, at the store's main interval. All three are derived rather
-#: than named, so this holds for any pull.
-#:
-#: The de-duplication matters and is not cosmetic. A dual-listed company
-#: appears twice -- RELIANCE.NS and RELIANCE.BO are one business -- and
-#: counting both would weight it double in every decile and median here. The
-#: listing with more observed rows wins, which is the one with less of the
-#: vendor's filler in it.
 _UNIVERSE = r"""
     WITH main_interval AS (
         SELECT "interval" FROM daily_price
@@ -131,8 +68,6 @@ _OBSERVED = _UNIVERSE + """,
          WHERE NOT d.synthetic)
 """
 
-#: One row per quarter: how the typical name did, how many rose, how far apart
-#: the best and worst finished, and how much they moved day to day.
 QUARTER_STATS_SQL = _OBSERVED + """,
     qret AS (
         SELECT CAST(year(trade_date) AS VARCHAR) || ' Q'
@@ -163,7 +98,6 @@ QUARTER_STATS_SQL = _OBSERVED + """,
      ORDER BY r.quarter
 """
 
-#: Where each name stands against its close before a given date.
 RECOVERY_SQL = _OBSERVED + """,
     marks AS (
         SELECT symbol,
@@ -180,7 +114,6 @@ RECOVERY_SQL = _OBSERVED + """,
       FROM marks WHERE before IS NOT NULL
 """
 
-#: Daily volatility either side of a pivot date, per symbol.
 REGIME_SQL = _OBSERVED + """,
     v AS (
         SELECT symbol,
@@ -206,24 +139,10 @@ COVERAGE_SQL = _OBSERVED + """
 
 
 def _sql(template: str, **values) -> str:
-    """Fill a template. Every value here is derived from the store, never from
-    user input -- quarter labels and dates this module computed itself."""
     return template.format(share=FULL_HISTORY_SHARE, **values)
 
 
-# ---------------------------------------------------------------------------
-# Reading the store once, into the shape the generators work from.
-# ---------------------------------------------------------------------------
-
 def market_context(handle) -> dict:
-    """Everything the generators need, read once.
-
-    Also decides, from the data, which quarter was the selloff and which was
-    the rebound -- rather than either being named in advance. The selloff is
-    the worst quarter by median return; the rebound is the best quarter after
-    it. On a store with no down quarter there is no selloff, and the claims
-    that depend on one report themselves unavailable.
-    """
     from . import store as store_module
 
     quarters = store_module.records(handle, _sql(QUARTER_STATS_SQL))
@@ -252,7 +171,6 @@ def market_context(handle) -> dict:
 
 
 def _quarter_start(quarter: str) -> str:
-    """`2026 Q1` -> `2026-01-01`. The label is one this module built."""
     year, q = quarter.split(" Q")
     return f"{int(year):04d}-{(int(q) - 1) * 3 + 1:02d}-01"
 
@@ -271,7 +189,6 @@ def _period_of(context: dict) -> str:
 
 
 def _too_thin(context: dict) -> str | None:
-    """The one check every generator starts with."""
     if context["symbols"] < MIN_SYMBOLS:
         return (f"Only {context['symbols']} symbol"
                 f"{'' if context['symbols'] == 1 else 's'} "
@@ -284,10 +201,6 @@ def _too_thin(context: dict) -> str | None:
                 f"{MIN_QUARTERS}.")
     return None
 
-
-# ---------------------------------------------------------------------------
-# Generator 1 -- dispersion: was the crash a market event or a picking event?
-# ---------------------------------------------------------------------------
 
 def dispersion_claim(handle, context: dict) -> Finding:
     title = "How much stock selection mattered, and when"
@@ -375,11 +288,6 @@ def dispersion_claim(handle, context: dict) -> Finding:
     )
 
 
-# ---------------------------------------------------------------------------
-# Generator 2 -- breadth: has the recovery reached the names, or just the
-# median?
-# ---------------------------------------------------------------------------
-
 def breadth_claim(handle, context: dict) -> Finding:
     from . import store as store_module
 
@@ -465,10 +373,6 @@ def breadth_claim(handle, context: dict) -> Finding:
         table=context["quarters"],
     )
 
-
-# ---------------------------------------------------------------------------
-# Generator 3 -- the risk regime either came back or it did not.
-# ---------------------------------------------------------------------------
 
 def volatility_claim(handle, context: dict) -> Finding:
     from . import store as store_module
@@ -561,22 +465,9 @@ GENERATORS = [dispersion_claim, breadth_claim, volatility_claim]
 
 
 def generate(handle) -> list:
-    """Every claim, computed from the store as it is now."""
     context = market_context(handle)
     return [generator(handle, context) for generator in GENERATORS]
 
-
-# ---------------------------------------------------------------------------
-# Data-quality tables. NOT claims, and deliberately the only queries in this
-# module that read interpolated rows -- they are what those rows are FOR.
-#
-# The Data quality tab renders these. They are the evidence for why every
-# claim above excludes vendor-interpolated candles: on a dual-listed name an
-# interpolated BSE close sits a median 3.8% from the NSE print for the same
-# day, against 0.03% when both venues actually traded. That is a fact about
-# the feed, so it is reported as one rather than dressed up as a finding
-# about the market.
-# ---------------------------------------------------------------------------
 
 _DUAL_LISTED = r"""
     WITH t AS (
@@ -642,11 +533,6 @@ INTERPOLATION_BY_QUARTER_SQL = """
 """
 
 
-
-# ---------------------------------------------------------------------------
-# claims.md, rendered from the same generators the dashboard uses.
-# ---------------------------------------------------------------------------
-
 DEFAULT_CLAIMS_PATH = "ETL_Analysis/claims.md"
 
 
@@ -679,23 +565,16 @@ def _quarter_table(rows: list) -> str:
 
 
 def render_markdown(findings: list, db_path: str, generated_at) -> str:
-    """Write the claims out as the sprint's `claims.md`.
-
-    Generated, not authored: the figures come from the same functions the
-    dashboard renders, so the document cannot describe a different dataset
-    from the page. Re-run it after a pipeline run and it re-states itself.
-    """
     supported = [f for f in findings if f.available]
     missing = [f for f in findings if not f.available]
 
     out = [
         "# Business claims",
         "",
-        "<!-- GENERATED FILE. Do not edit by hand: every figure below is",
-        "     computed from the store. Regenerate with",
-        "         python -m ETL_Analysis.claims",
-        "     or as part of a run with",
-        "         python -m ETL_Analysis.pipeline --claims -->",
+        "**GENERATED FILE - do not edit by hand.** Every figure below is "
+        "computed from the store. Regenerate it with "
+        "`python -m ETL_Analysis.claims`, or as part of a run with "
+        "`python -m ETL_Analysis.pipeline --claims`.",
         "",
         f"Generated {generated_at:%d %B %Y, %H:%M} from `{db_path}`.",
         "",
@@ -784,7 +663,6 @@ def render_markdown(findings: list, db_path: str, generated_at) -> str:
 
 def write_markdown(handle, path: str, db_path: str,
                    generated_at=None) -> str:
-    """Generate the claims and write them to `path`. Returns the path."""
     from datetime import datetime
     from pathlib import Path
 

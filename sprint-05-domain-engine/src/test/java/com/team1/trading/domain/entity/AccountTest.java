@@ -13,9 +13,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Client is the account: it holds the wallet balance and the account state.
- */
 class AccountTest {
 
     private Client account;

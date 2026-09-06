@@ -5,11 +5,6 @@ import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.Objects;
 
-/**
- * Common shape shared by PortfolioHolding and PortfolioPosition: a
- * client's stake in one instrument, tracked by quantity, average price
- * paid, and gains against the current market price.
- */
 public abstract class PortfolioEntry {
 
     private final Long portifolioid;
@@ -64,12 +59,6 @@ public abstract class PortfolioEntry {
         return updatedAt;
     }
 
-    /**
-     * Recomputes overall gains against a live market price:
-     * (currentPrice - pricePerUnit) * quantity. Shared by both subclasses
-     * since the formula doesn't differ - only how each one's quantity
-     * moves does.
-     */
     public void calculateOverallGains(BigDecimal currentPrice) {
         this.overallGains = currentPrice.subtract(pricePerUnit)
                 .multiply(BigDecimal.valueOf(quantity))

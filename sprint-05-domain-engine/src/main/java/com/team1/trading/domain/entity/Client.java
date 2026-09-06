@@ -18,7 +18,6 @@ public class Client {
     private String accountState;
     private BigDecimal walletBalance;
 
-    /** For a brand-new client - generates its own identifier. */
     public Client(Long clientId, String accountNumber, String name, String email, String phone) {
         this.clientId = clientId;
         this.accountNumber = Objects.requireNonNull(accountNumber, "accountNumber must not be null");
@@ -30,7 +29,6 @@ public class Client {
         this.walletBalance = BigDecimal.ZERO.setScale(2, RoundingMode.UNNECESSARY);
     }
 
-    /** For reconstructing a client already in storage, with its existing id. */
     public Client(Long clientId, String accountNumber, String name, String email, String phone,
                   LocalDateTime createdOn, String accountState, BigDecimal walletBalance) {
         this.clientId = clientId;
@@ -43,7 +41,6 @@ public class Client {
         this.walletBalance = walletBalance;
     }
 
-    /** The numeric key orders.user_id references. */
     public Long getClientId() {
         return clientId;
     }
@@ -82,17 +79,14 @@ public class Client {
         this.phone = phone;
     }
 
-    /** Business rule 2 asks this. Only an ACTIVE account trades. */
     public boolean canTrade() {
         return AccountStatus.ACTIVE.name().equals(accountState);
     }
 
-    /** Lifts a suspension. The suspension is reversible. */
     public void activate() {
         this.accountState = AccountStatus.ACTIVE.name();
     }
 
-    /** The account can still be read, it just cannot trade. */
     public void suspend() {
         this.accountState = AccountStatus.SUSPENDED.name();
     }
@@ -101,25 +95,14 @@ public class Client {
         this.accountState = AccountStatus.CLOSED.name();
     }
 
-    /**
-     * Whether the wallet covers the amount. Business rule 6 asks this before a
-     * buy, so nothing is subtracted to find out. Exactly the balance is
-     * affordable; a penny more is not.
-     */
     public boolean canAfford(BigDecimal amount) {
         return walletBalance.compareTo(money(amount)) >= 0;
     }
 
-    /** Puts money in. Zero is allowed and moves nothing. */
     public void credit(BigDecimal amount) {
         this.walletBalance = money(walletBalance.add(money(amount)));
     }
 
-    /**
-     * Takes money out. A debit that would leave the balance negative is
-     * refused before anything is subtracted, rather than attempted and then
-     * inspected for a negative result.
-     */
     public void debit(BigDecimal amount) {
         BigDecimal value = money(amount);
         if (walletBalance.compareTo(value) < 0) {
@@ -129,12 +112,6 @@ public class Client {
         this.walletBalance = money(walletBalance.subtract(value));
     }
 
-    /**
-     * Money is decimal at two places and never a double, because binary
-     * floating point cannot represent 0.10 exactly and a balance out by a
-     * hundredth of a penny after a thousand trades is a defect an auditor
-     * finds first. An absent or negative amount is not money.
-     */
     private static BigDecimal money(BigDecimal amount) {
         if (amount == null) {
             throw new IllegalArgumentException("amount must not be null");

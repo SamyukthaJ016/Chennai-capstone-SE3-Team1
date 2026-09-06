@@ -1,18 +1,7 @@
-# Sprint 4 dependencies.
-#
-#   pip install -r ETL_Analysis/requirements.txt
-#
-# Nothing here is needed to run the transform, which is pure by design and is
-# where most of the test suite lives. `python -m ETL_Analysis.pipeline --print`
-# runs the whole pipeline against the fixtures with none of it installed.
+duckdb>=0.10
+streamlit>=1.30
+plotly>=5.18
+pandas>=2.0
+requests>=2.31
 
-duckdb>=0.10        # the analytical store, and what the dashboard reads
-streamlit>=1.30     # the dashboard: tabs, filters and the SQL console
-plotly>=5.18        # the charts, in the dashboard and the legacy report
-pandas>=2.0         # the dashboard's tables and CSV downloads
-requests>=2.31      # the live Fauxnance client only (extract_live.py)
-
-# Tests. `pytest ETL_Analysis/tests` runs whatever the installed set allows:
-# the store- and dashboard-backed tests skip rather than fail when duckdb or
-# streamlit is absent.
 pytest>=7.0

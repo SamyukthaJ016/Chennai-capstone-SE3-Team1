@@ -62,7 +62,6 @@ public class Order {
         this.updatedAt = LocalDateTime.now();
     }
 
-    /** Filled by the Trade Executor against a live quote; that quote is the executed price. */
     public void markCompleted(BigDecimal executedPrice) {
         requireTransitionableFromNew();
         this.executedPrice = Objects.requireNonNull(executedPrice, "executedPrice must not be null");
@@ -82,7 +81,6 @@ public class Order {
         this.updatedAt = LocalDateTime.now();
     }
 
-    /** NEW is the only non-terminal state; every terminal state refuses to move again. */
     private void requireTransitionableFromNew() {
         if (this.status != OrderStatus.NEW) {
             throw new IllegalStateException("order " + orderId + " is " + status + ", cannot transition");

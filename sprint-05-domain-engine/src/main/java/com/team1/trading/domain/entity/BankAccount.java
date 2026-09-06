@@ -66,17 +66,14 @@ public class BankAccount {
         return ifscCode;
     }
 
-    /** Current balance. Matches the diagram's getBalance(). */
     public BigDecimal getBalance() {
         return accountBalance;
     }
 
-    /** Refused before anything is added if the amount isn't positive. */
     public void deposit(BigDecimal amount) {
         this.accountBalance = accountBalance.add(amount);
     }
 
-    /** Refused before anything is subtracted if it would go negative. */
     public void withdraw(BigDecimal amount) {
         this.accountBalance = accountBalance.subtract(amount);
     }

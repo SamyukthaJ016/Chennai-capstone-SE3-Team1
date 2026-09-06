@@ -1,6 +1,5 @@
 package com.team1.trading.domain.exception;
 
-/** Rule 2, ACC-403: the account exists but is SUSPENDED or INACTIVE. */
 public class AccountNotActiveException extends DomainException {
 
     public static final String CODE = "ACC-403";
@@ -19,7 +18,6 @@ public class AccountNotActiveException extends DomainException {
         return accountId;
     }
 
-    /** Which state it was in. For the server log. */
     public String getAccountState() {
         return accountState;
     }

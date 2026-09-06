@@ -1,58 +1,18 @@
-"""Charts: the dashboard's figures, built as plain dicts.
-
-Every function here is pure -- dicts in, a `{"data": [...], "layout": {...}}`
-dict out -- and imports no plotting library. Plotly is touched only where the
-dashboard hands a figure to `st.plotly_chart`. So a chart showing the wrong
-number is a bug in a tested pure function, not somewhere inside a renderer,
-which is the same split `report.py` uses and for the same reason.
-
-THE PALETTE, AND WHY THIS ORDER
-    Okabe-Ito, which is designed to stay distinguishable under the common
-    forms of colour vision deficiency. The ORDER is not cosmetic: colours are
-    assigned to series in the order below and adjacent slots are the pair a
-    reader most often has to tell apart, so the ordering is what the
-    colour-blindness margin actually depends on.
-
-    Validated, not eyeballed. The previous order put reddish-purple next to
-    bluish-green, whose separation under deuteranopia is dE 7.6 -- inside the
-    band that is only legal with a second, non-colour encoding. Moving orange
-    between them lifts the worst adjacent pair to dE 9.6 deuteran / 20.0
-    normal, clear of the >= 8 target, with the same six hexes.
-
-    Three of the six sit below 3:1 contrast against the page. That is inherent
-    to these hues and is met the way the rule allows: every chart in the
-    dashboard has a table beside it carrying the same numbers, and series are
-    named in a legend rather than identified by colour alone.
-
-DISPOSITION IS A STATUS, NOT AN IDENTITY
-    Loaded clean / loaded after repair / quarantined are states with a
-    direction, so they take the status palette rather than three series
-    slots -- and they always carry their label, never the colour alone.
-
-NEVER TWO Y-AXES
-    Price and volume are separate figures rather than one chart with two
-    scales. Two scales on one plot invent a correlation by choosing where to
-    align them, and the reader cannot see that choice.
-"""
-
 from __future__ import annotations
 
-# --- Categorical series palette (Okabe-Ito, validated order) ---------------
 SERIES_COLOURS = [
-    "#0072B2",  # blue
-    "#D55E00",  # vermillion
-    "#009E73",  # bluish green
-    "#E69F00",  # orange
-    "#CC79A7",  # reddish purple
-    "#56B4E9",  # sky blue
+    "#0072B2",
+    "#D55E00",
+    "#009E73",
+    "#E69F00",
+    "#CC79A7",
+    "#56B4E9",
 ]
 
-# --- Status palette. Reserved: never used for "series 4". ------------------
 STATUS_GOOD = "#0ca30c"
 STATUS_WARNING = "#fab219"
 STATUS_CRITICAL = "#d03b3b"
 
-# --- Chart chrome ----------------------------------------------------------
 SURFACE = "#fcfcfb"
 PAGE = "#f9f9f7"
 INK = "#0b0b0b"
@@ -64,11 +24,8 @@ BASELINE = "#c3c2b7"
 FONT_STACK = ('system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, '
               'Arial, sans-serif')
 
-#: A line chart stops being readable somewhere around six series.
 MAX_COMPARISON_SERIES = 6
 
-#: Direct-label at most this many series; past it the legend carries identity
-#: on its own, because four labels stacked at one x already crowd.
 MAX_DIRECT_LABELS = 4
 
 PLOTLY_CONFIG = {
@@ -92,23 +49,10 @@ BASE_LAYOUT = {
 
 
 def colour_for(index: int) -> str:
-    """The series colour for a slot.
-
-    Colour follows the ENTITY, so the caller passes a stable index -- the
-    symbol's position in the selection, not its current rank. Filtering a
-    series out must not repaint the survivors.
-    """
     return SERIES_COLOURS[index % len(SERIES_COLOURS)]
 
 
 def axis(title: str, **extra) -> dict:
-    """An axis with its title always set, and recessive solid hairlines.
-
-    A required argument rather than an optional one: a non-technical reader
-    must be able to read the chart unaided, and an unlabelled axis is the
-    usual way that fails. Gridlines are solid -- dashed reads as "threshold"
-    when it is only a grid.
-    """
     spec = {
         "title": {"text": title, "font": {"size": 12, "color": INK_SECONDARY}},
         "gridcolor": GRIDLINE,
@@ -124,14 +68,6 @@ def axis(title: str, **extra) -> dict:
 
 
 def count_axis(title: str, largest: int | None = None, **extra) -> dict:
-    """An axis for a COUNT of things.
-
-    Plotly's automatic ticks are chosen for continuous data, so a chart whose
-    tallest bar is 1 gets ticks at 0, 0.2, 0.4 -- and there is no such thing as
-    a fifth of a row. Whole numbers are forced while the counts are small
-    enough for that to matter; above ten, plotly's own steps are integers
-    anyway.
-    """
     spec = {"rangemode": "tozero", "tickformat": ",d"}
     if largest is not None and largest <= 10:
         spec["dtick"] = 1
@@ -156,12 +92,6 @@ def _legend(**extra) -> dict:
 
 
 def stagger(values: list[float], min_gap: float) -> list[float]:
-    """Push label positions apart so they do not overlap, order preserved.
-
-    Direct labels at the end of a set of lines collide whenever two series
-    finish close together. Each label is placed at its series' real value, and
-    only nudged when the one above it is nearer than `min_gap`.
-    """
     if not values:
         return []
     ranked = sorted(range(len(values)), key=lambda i: values[i], reverse=True)
@@ -176,18 +106,6 @@ def stagger(values: list[float], min_gap: float) -> list[float]:
 
 
 def split_by_quarter(rows: list[dict]) -> list[tuple]:
-    """Rows grouped into calendar quarters, chronologically, as
-    [(label, rows), ...].
-
-    The quarter is keyed on YEAR and quarter, not quarter alone. Keying on the
-    quarter alone is fine for a single year and silently wrong past it: a pull
-    running Aug 2025 to Aug 2026 would draw September 2025 and September 2026
-    as one line called "Q3", joining two points a year apart and inventing the
-    move between them. The store this dashboard reads spans exactly that.
-
-    The year is only printed when the rows actually span more than one, so a
-    single-year pull still reads "Q1", not "2026 Q1".
-    """
     buckets: dict[tuple, list[dict]] = {}
     for row in rows:
         key = (row["date"].year, (row["date"].month - 1) // 3 + 1)
@@ -206,23 +124,8 @@ def _currency_of(result: dict) -> str:
             or "currency")
 
 
-# ---------------------------------------------------------------------------
-# Overview figures
-# ---------------------------------------------------------------------------
-
 def comparison_figure(results: list[dict],
                       max_series: int = MAX_COMPARISON_SERIES) -> tuple:
-    """Every symbol rebased to 100, so instruments at different price levels
-    are comparable on ONE axis.
-
-    Returns (figure, trimmed). `trimmed` is True when only the biggest movers
-    are charted, so the caller can say so rather than letting a reader think
-    six symbols was all there was.
-
-    Each series carries its own real dates. Positioning by list index would
-    draw one symbol's fourth point on another symbol's fourth date, silently
-    claiming a price moved on a day it did not.
-    """
     charted = [r for r in results if len(r["rows"]) >= 2]
     if not charted:
         return None, False
@@ -260,16 +163,11 @@ def comparison_figure(results: list[dict],
         yaxis=axis("Price, indexed to 100 on each instrument's first day"),
         hovermode="x unified",
         legend=_legend(),
-        # Stated rather than left to plotly's default: identity must never
-        # rest on colour alone once there is more than one series, and a
-        # library default is not a guarantee.
         showlegend=len(traces) > 1,
         height=400,
         margin={"l": 68, "r": 24, "t": 44, "b": 52},
     )
 
-    # Selective direct labels: the endpoint only, and only while there are few
-    # enough for them to be read. Never a number on every point.
     if len(endpoints) <= MAX_DIRECT_LABELS:
         finals = [point[1] for point in endpoints]
         span = (max(finals) - min(finals)) or 1.0
@@ -287,13 +185,6 @@ def comparison_figure(results: list[dict],
 
 
 def disposition_figure(results: list[dict]) -> dict | None:
-    """Stacked bars: how each symbol's candles were dispositioned.
-
-    The reconciliation invariant, drawn -- every candle received is either
-    loaded or quarantined, and the bar length is what arrived. Segments are
-    separated by a surface-coloured gap rather than an outline, so the join
-    reads as a gap and not as a border.
-    """
     if not results:
         return None
 
@@ -327,8 +218,6 @@ def disposition_figure(results: list[dict]) -> dict | None:
                          max((sum(values) for values in
                               zip(clean, repaired, quarantined)), default=0)),
         yaxis=axis("Symbol", automargin=True, autorange="reversed"),
-        # Plotly reverses a stacked chart's legend by default, which puts the
-        # legend in the opposite order to the segments it describes.
         legend=_legend(traceorder="normal"),
         hovermode="closest",
         height=max(200, 64 + 30 * len(symbols)),
@@ -338,11 +227,6 @@ def disposition_figure(results: list[dict]) -> dict | None:
 
 
 def reason_figure(reason_rows: list[dict]) -> dict | None:
-    """Why rows were rejected, worst first.
-
-    Reason codes are nominal -- one series, one colour. Shading each bar by
-    its own length would spend the colour channel restating the bar length.
-    """
     rows = [r for r in reason_rows if r.get("rows_affected")]
     if not rows:
         return None
@@ -375,22 +259,8 @@ def reason_figure(reason_rows: list[dict]) -> dict | None:
     return {"data": [trace], "layout": layout}
 
 
-# ---------------------------------------------------------------------------
-# Per-symbol figures
-# ---------------------------------------------------------------------------
-
 def price_figure(result: dict, by_quarter: bool = False,
                  colour_index: int = 0) -> dict | None:
-    """One symbol's closing price.
-
-    Repaired rows are drawn as open diamonds, so a reader can see at a glance
-    which points were corrected rather than observed -- the shape carries that
-    distinction, not the colour, so it survives a greyscale print.
-
-    `by_quarter` splits the line into one trace per calendar quarter, always
-    Q1..Q4 in that order including the empty ones, so a legend click isolates
-    a quarter.
-    """
     rows = result["rows"]
     if not rows:
         return None
@@ -427,7 +297,7 @@ def price_figure(result: dict, by_quarter: bool = False,
         show_legend = True
     else:
         traces = [series(rows, symbol, colour_for(colour_index))]
-        show_legend = False  # one series: the title above the chart names it
+        show_legend = False
 
     layout = _layout(
         xaxis=axis("Trading day", type="date"),
@@ -453,12 +323,6 @@ def price_figure(result: dict, by_quarter: bool = False,
 
 
 def volume_figure(result: dict, colour_index: int = 0) -> dict | None:
-    """One symbol's daily traded volume.
-
-    A day with no reported volume is passed as null, which leaves a gap rather
-    than drawing a zero bar. A missing figure is not a day without trading,
-    and a zero bar would say it was.
-    """
     rows = result["rows"]
     if not rows:
         return None
@@ -496,12 +360,6 @@ def volume_figure(result: dict, colour_index: int = 0) -> dict | None:
 
 
 def return_histogram(result: dict, colour_index: int = 0) -> dict | None:
-    """How the symbol's daily returns are spread.
-
-    The measures quote a mean and a standard deviation; this is the shape
-    those two numbers summarise, which is where a fat tail shows up and an
-    average does not.
-    """
     returns = [r["daily_return_pct"] for r in result["rows"]
                if r["daily_return_pct"] is not None]
     if len(returns) < 2:
@@ -530,17 +388,8 @@ def return_histogram(result: dict, colour_index: int = 0) -> dict | None:
     return {"data": [trace], "layout": layout}
 
 
-# ---------------------------------------------------------------------------
-# Across runs
-# ---------------------------------------------------------------------------
-
 def metric_history_figure(rows: list[dict], label: str,
                           unit: str = "") -> dict | None:
-    """One measure per symbol, across runs, in the order the runs happened.
-
-    The x axis is the run, not a date: two runs on the same day are two
-    points, and a run that reloaded the same window should sit flat.
-    """
     if not rows:
         return None
 
@@ -581,20 +430,7 @@ def metric_history_figure(rows: list[dict], label: str,
     return {"data": traces, "layout": layout}
 
 
-# ---------------------------------------------------------------------------
-# Claim figures
-# ---------------------------------------------------------------------------
-
 def venue_gap_figure(rows: list[dict]) -> dict | None:
-    """How far apart the two venues price the same company on the same day,
-    split by whether the vendor interpolated the BSE candle.
-
-    A log x axis, because the whole finding is that one bar is two orders of
-    magnitude longer than the other -- on a linear axis the observed-day bar
-    is invisible and the reader cannot see what the comparison is against.
-    The axis title says it is a log scale so nobody reads the lengths as a
-    ratio.
-    """
     if not rows:
         return None
 
@@ -616,9 +452,6 @@ def venue_gap_figure(rows: list[dict]) -> dict | None:
                           "<extra>%{y}</extra>"),
     }
     layout = _layout(
-        # One tick per decade. Plotly's default log ticks label every minor
-        # step, which renders as "2 3 4 5 6 7 8 9 0.1 2 3 4 5..." and is
-        # unreadable; the decades are the only marks this comparison needs.
         xaxis=axis("Median gap between the NSE and BSE close, same company and "
                    "day (%, log scale)", type="log", dtick=1),
         yaxis=axis("", automargin=True, showticklabels=True),
@@ -632,12 +465,6 @@ def venue_gap_figure(rows: list[dict]) -> dict | None:
 
 
 def quarterly_figure(rows: list[dict]) -> dict | None:
-    """Median return and breadth, quarter by quarter.
-
-    Two measures, one axis: both are percentages, so they are comparable and
-    a second y axis would be inventing a relationship. Breadth is drawn as a
-    line over the return bars because the claim is about the two disagreeing.
-    """
     if not rows:
         return None
 
@@ -675,7 +502,6 @@ def quarterly_figure(rows: list[dict]) -> dict | None:
 
 
 def volatility_figure(rows: list[dict]) -> dict | None:
-    """Median daily volatility by quarter -- the regime, not the event."""
     if not rows:
         return None
     quarters = [r["quarter"] for r in rows]
@@ -702,11 +528,6 @@ def volatility_figure(rows: list[dict]) -> dict | None:
 
 
 def interpolation_figure(rows: list[dict]) -> dict | None:
-    """Share of rows the vendor interpolated, by quarter and venue.
-
-    One line per venue -- the claim is that they diverge, so they belong on
-    one axis where the divergence is the shape.
-    """
     if not rows:
         return None
 
@@ -746,13 +567,6 @@ def interpolation_figure(rows: list[dict]) -> dict | None:
 
 
 def dispersion_figure(rows: list[dict]) -> dict | None:
-    """How far apart the best and worst names finished, quarter by quarter.
-
-    The decile band is drawn as a bar from the bottom decile to the top, with
-    the median marked inside it. A single "spread" number would hide the thing
-    that matters: whether the band sits above or below zero. In 2026 Q1 it is
-    almost entirely below; in Q2 it is wide and mostly above.
-    """
     if not rows:
         return None
 
@@ -762,8 +576,6 @@ def dispersion_figure(rows: list[dict]) -> dict | None:
     medians = [float(r["median_return_pct"]) for r in rows]
 
     traces = [
-        # An invisible bar lifts the visible one to the bottom decile, so the
-        # drawn band spans decile to decile rather than starting at zero.
         {"type": "bar", "x": quarters, "y": bottoms,
          "marker": {"color": "rgba(0,0,0,0)"}, "hoverinfo": "skip",
          "showlegend": False, "name": ""},
