@@ -1,18 +1,3 @@
-"""The fourth module: wires extract -> transform -> load and does nothing else.
-
-No parsing, no cleaning, no printing of data. Every line here is either calling
-one of the three steps or reporting which step something failed in. If a number
-comes out wrong, it came from one of the three modules, not from this one.
-
-Run it:
-
-    python -m ETL_Analysis.pipeline
-    python -m ETL_Analysis.pipeline --symbols RELIANCE.NS INFY.NS
-    python -m ETL_Analysis.pipeline --live          # once a real key exists
-
-Switching to the live Fauxnance client is the `--live` flag: it swaps which
-`extract` callable is bound, and transform and load are untouched.
-"""
 
 from __future__ import annotations
 
@@ -35,11 +20,7 @@ def run(symbols: list[str], extract_fn=None, show_rows: int | None = None,
         to_console: bool = False,
         report_path: str | None = report_module.DEFAULT_REPORT_PATH,
         inline_js: bool = True) -> int:
-    """Run the pipeline over `symbols`. Returns a process exit code.
-
-    `extract_fn` is injected so the live client can be substituted without
-    touching transform or load.
-    """
+   
     extract_fn = extract_fn or extract_fixtures.extract
 
     # --- EXTRACT ---------------------------------------------------------
@@ -49,7 +30,7 @@ def run(symbols: list[str], extract_fn=None, show_rows: int | None = None,
         try:
             log.info("extract: %s", symbol)
             payloads.append(extract_fn(symbol))
-        except Exception as exc:  # noqa: BLE001 - reported per symbol, run continues
+        except Exception as exc:  
             log.error("extract failed for %s: %s", symbol, exc)
             failures.append((symbol, str(exc)))
 
@@ -73,9 +54,7 @@ def run(symbols: list[str], extract_fn=None, show_rows: int | None = None,
             log.error("%s", exc)
             return 1
 
-    # --- REPORT ----------------------------------------------------------
-    # Not an ETL step: renders what the pipeline produced. Written after
-    # the load so a report only ever describes data that actually landed.
+    
     if report_path:
         try:
             written = report_module.write_report(
@@ -178,9 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         format="%(levelname)-7s %(name)s: %(message)s",
     )
 
-    # --- decide the symbol list -----------------------------------------
-    # Two cases, and no third. Either you named the symbols, or the universe
-    # file is used in full.
+    
     if args.list_symbols:
         universe = symbols_module.load_symbol_file(args.symbol_file)
         grouped = symbols_module.group_by_exchange(universe)
