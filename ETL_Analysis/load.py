@@ -1,36 +1,3 @@
-"""Load: the only part of the pipeline that writes.
-
-Writes the transform's output into the analytical store, DuckDB. Two things
-land there, per the sprint's decision:
-
-  - the analysis rows   -> daily_price
-  - the rejected rows   -> quarantined_candle
-
-plus a ledger row per symbol per run in load_run, so "what did this load and
-do the numbers add up" is answerable in SQL rather than only in a console log.
-
-DDL lives in `analytics_schema.sql` next to this module, in portable ANSI SQL.
-
-The previous print-only loader is kept as `load_print.py`, so the pipeline can
-still be demonstrated on a machine with no DuckDB installed.
-
-IDEMPOTENT BY CONSTRUCTION
-    The contract requires it: "Make the load idempotent: re-running yesterday's
-    load must not double-count. Merge on the natural key, do not blindly
-    insert."
-
-    daily_price is merged on (symbol, trade_date): the loader DELETEs exactly
-    the dates it is about to write, then INSERTs. Deleting by date rather than
-    by symbol means a narrow re-pull does not destroy history from a wider one.
-    quarantined_candle is replaced per symbol for the same reason.
-
-STRUCTURE
-    Everything that shapes a row is a pure function -- `exchange_for`,
-    `date_key_for`, `price_row`, `quarantine_row` -- and is tested without a
-    database. Only `connect`, `ensure_schema` and `write_result` touch DuckDB.
-    If a number lands wrong, the pure functions are where to look first.
-"""
-
 from __future__ import annotations
 
 import json
@@ -42,22 +9,14 @@ from pathlib import Path
 from . import transform as transform_module
 
 DEFAULT_DB_PATH = "warehouse.duckdb"
+
+DEFAULT_INTERVAL = "1d"
 SCHEMA_FILE = Path(__file__).parent / "analytics_schema.sql"
 
 log = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Pure shaping logic. No database, no I/O -- testable on its own.
-# ---------------------------------------------------------------------------
-
 def exchange_for(symbol: str) -> str:
-    """Map a Fauxnance symbol to its venue.
-
-    The same rule contracts/analytics-schema.sql states for DIM_INSTRUMENT:
-    a .NS suffix means NSE, .BO means BSE, an FX: prefix means FX, X: means
-    crypto, and a plain ticker means a US venue.
-    """
     if not symbol:
         return "UNKNOWN"
     upper = symbol.upper()
@@ -73,18 +32,14 @@ def exchange_for(symbol: str) -> str:
 
 
 def date_key_for(value: date) -> int:
-    """YYYYMMDD, matching DIM_DATE.date_key in the contract."""
     return value.year * 10000 + value.month * 100 + value.day
 
 
 def price_row(row: dict, run_id: str, loaded_at: datetime) -> tuple:
-    """Flatten one clean transform row into a daily_price tuple.
-
-    Column order must match INSERT_PRICE_SQL below.
-    """
     return (
         row["symbol"],
         row["date"],
+        row.get("interval") or DEFAULT_INTERVAL,
         date_key_for(row["date"]),
         exchange_for(row["symbol"]),
         row.get("currency"),
@@ -107,7 +62,6 @@ def price_row(row: dict, run_id: str, loaded_at: datetime) -> tuple:
 
 
 def quarantine_row(bad: dict, run_id: str, quarantined_at: datetime) -> tuple:
-    """Flatten one quarantined candle into a quarantined_candle tuple."""
     candle = bad.get("candle")
     raw_date = candle.get("date") if isinstance(candle, dict) else None
     return (
@@ -122,7 +76,6 @@ def quarantine_row(bad: dict, run_id: str, quarantined_at: datetime) -> tuple:
 
 
 def run_row(result: dict, run_id: str, loaded_at: datetime) -> tuple:
-    """Flatten one transform result into a load_run ledger tuple."""
     s = result["summary"]
     return (
         run_id,
@@ -141,25 +94,20 @@ def run_row(result: dict, run_id: str, loaded_at: datetime) -> tuple:
 
 
 def new_run_id() -> str:
-    """Sortable, unique, readable in a result set."""
     return f"{datetime.now():%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:6]}"
 
 
-# ---------------------------------------------------------------------------
-# SQL. Placeholders are `?`, which DuckDB and SQLite both use -- which is what
-# lets the SQLite mirror in tests exercise these exact statements.
-# ---------------------------------------------------------------------------
-
 INSERT_PRICE_SQL = """
 INSERT INTO daily_price (
-    symbol, trade_date, date_key, exchange, currency,
+    symbol, trade_date, "interval", date_key, exchange, currency,
     "open", "high", "low", "close", adj_close, volume,
     price_range, price_change, daily_return_pct, turnover,
     synthetic, repaired, repairs, run_id, loaded_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
-DELETE_PRICE_SQL = "DELETE FROM daily_price WHERE symbol = ? AND trade_date = ?"
+DELETE_PRICE_SQL = ('DELETE FROM daily_price '
+                    'WHERE symbol = ? AND trade_date = ? AND "interval" = ?')
 
 INSERT_QUARANTINE_SQL = """
 INSERT INTO quarantined_candle (
@@ -194,15 +142,10 @@ SELECT run_id, symbol, candles_in, rows_kept, rows_quarantined
 """
 
 
-# ---------------------------------------------------------------------------
-# The database boundary.
-# ---------------------------------------------------------------------------
-
 def connect(db_path: str = DEFAULT_DB_PATH):
-    """Open the DuckDB store. One file on disk, no server, no credentials."""
     try:
         import duckdb
-    except ImportError as exc:  # pragma: no cover
+    except ImportError as exc:
         raise ImportError(
             "duckdb is required for the load step. Install it with:\n"
             "    pip install duckdb\n"
@@ -212,49 +155,91 @@ def connect(db_path: str = DEFAULT_DB_PATH):
 
 
 def _ddl_statements(sql_text: str) -> list[str]:
-    """Split the DDL file into individual statements.
-
-    Executed one at a time rather than as one blob, because drivers differ on
-    whether a single execute() accepts multiple statements. Splitting is safe
-    here: the DDL contains no string literal with a semicolon in it.
-    """
     body = "\n".join(
         line for line in sql_text.splitlines() if not line.strip().startswith("--")
     )
     return [statement.strip() for statement in body.split(";") if statement.strip()]
 
 
-def ensure_schema(con) -> None:
-    """Create the tables if they are not already there.
+def _first_answer(con, attempts: list) -> set:
+    for sql, params, column in attempts:
+        try:
+            rows = con.execute(sql, params).fetchall()
+        except Exception:
+            continue
+        return {row[column] for row in rows}
+    return set()
 
-    The DDL is CREATE TABLE IF NOT EXISTS throughout, so this is safe on every
-    run and needs no migration ledger at this size.
-    """
+
+def _table_names(con) -> set:
+    return _first_answer(con, [
+        ("SELECT table_name FROM information_schema.tables "
+         "WHERE table_schema = 'main'", [], 0),
+        ("SELECT name FROM sqlite_master WHERE type = 'table'", [], 0),
+    ])
+
+
+def _columns_of(con, table: str) -> set:
+    return _first_answer(con, [
+        ("SELECT column_name FROM information_schema.columns "
+         "WHERE table_schema = 'main' AND table_name = ?", [table], 0),
+        (f'PRAGMA table_info("{table}")', [], 1),
+    ])
+
+
+def migrate_interval_into_the_grain(con) -> bool:
+    if "daily_price" not in _table_names(con):
+        return False
+    if "interval" in _columns_of(con, "daily_price"):
+        return False
+
+    log.warning("migrating daily_price: adding `interval` to the primary key; "
+                "existing rows are stamped %r", DEFAULT_INTERVAL)
+    con.execute("BEGIN TRANSACTION")
+    try:
+        for statement in _ddl_statements(SCHEMA_FILE.read_text(encoding="utf-8")):
+            if "CREATE TABLE IF NOT EXISTS daily_price" in statement:
+                con.execute(statement.replace(
+                    "CREATE TABLE IF NOT EXISTS daily_price",
+                    "CREATE TABLE daily_price__migrating"))
+                break
+        con.execute(f"""
+            INSERT INTO daily_price__migrating
+            SELECT symbol, trade_date, '{DEFAULT_INTERVAL}', date_key, exchange,
+                   currency, "open", "high", "low", "close", adj_close, volume,
+                   price_range, price_change, daily_return_pct, turnover,
+                   synthetic, repaired, repairs, run_id, loaded_at
+              FROM daily_price
+        """)
+        con.execute("DROP TABLE daily_price")
+        con.execute("ALTER TABLE daily_price__migrating RENAME TO daily_price")
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
+    return True
+
+
+def ensure_schema(con) -> None:
+    migrate_interval_into_the_grain(con)
     for statement in _ddl_statements(SCHEMA_FILE.read_text(encoding="utf-8")):
         con.execute(statement)
 
 
 def write_result(con, result: dict, run_id: str) -> int:
-    """Merge one transformed result into the store. Returns rows written.
-
-    Delete-then-insert order matters: clear the natural keys being rewritten
-    before inserting, or a re-run duplicates them.
-    """
     now = datetime.now()
     rows = result["rows"]
     quarantined = result["quarantined"]
     symbol = result["summary"]["symbol"]
 
-    # Merge on the natural key: clear exactly the dates about to be written.
     for row in rows:
-        con.execute(DELETE_PRICE_SQL, [row["symbol"], row["date"]])
+        con.execute(DELETE_PRICE_SQL, [row["symbol"], row["date"],
+                                       row.get("interval") or DEFAULT_INTERVAL])
     if rows:
         con.executemany(
             INSERT_PRICE_SQL, [price_row(r, run_id, now) for r in rows]
         )
 
-    # Quarantine is a full replace per symbol: this run's verdict on this
-    # symbol supersedes the previous one.
     con.execute(DELETE_QUARANTINE_SQL, [symbol])
     if quarantined:
         con.executemany(
@@ -262,8 +247,6 @@ def write_result(con, result: dict, run_id: str) -> int:
             [quarantine_row(b, run_id, now) for b in quarantined],
         )
 
-    # Analytical metrics, long format. Replaced per (run_id, symbol) so a
-    # repeated write within one run does not duplicate them.
     con.execute(DELETE_METRIC_SQL, [run_id, symbol])
     metric_rows = transform_module.metrics(result)
     if metric_rows:
@@ -276,29 +259,16 @@ def write_result(con, result: dict, run_id: str) -> int:
             ],
         )
 
-    # The ledger row is replaced for this (run_id, symbol) too, so
-    # write_result is idempotent across all four tables rather than three.
     con.execute(DELETE_RUN_SQL, [run_id, symbol])
     con.execute(INSERT_RUN_SQL, list(run_row(result, run_id, now)))
     return len(rows)
 
 
 def reconcile(con) -> list:
-    """Return any run rows where candles_in != kept + quarantined.
-
-    Empty is the healthy answer. A non-empty result means the pipeline lost a
-    row between arriving and landing, which is the failure this whole design
-    exists to make visible.
-    """
     return con.execute(RECONCILE_SQL).fetchall()
 
 
-# ---------------------------------------------------------------------------
-# Entry points used by pipeline.py
-# ---------------------------------------------------------------------------
-
 def load(result: dict, db_path: str = DEFAULT_DB_PATH, run_id: str | None = None) -> int:
-    """Load a single transformed result. Returns rows written."""
     run_id = run_id or new_run_id()
     con = connect(db_path)
     try:
@@ -314,7 +284,6 @@ def load_many(
     db_path: str = DEFAULT_DB_PATH,
     run_id: str | None = None,
 ) -> dict:
-    """Load several transformed results into one store, on one connection."""
     run_id = run_id or new_run_id()
     totals = {
         "run_id": run_id,

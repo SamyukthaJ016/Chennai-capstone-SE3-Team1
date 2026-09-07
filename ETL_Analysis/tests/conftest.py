@@ -1,31 +1,24 @@
-"""Make the repository root importable, and stub plotly when it is absent.
-
-Remove the sys.path block once the sprint's packaging metadata is in place and
-the project is installed with `pip install -e`.
-"""
-
-import json
+import re
 import sys
 import types
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
+PLOTLY_BUNDLE_MARKER = "plotly.js v"
+PLOTLY_CDN_HOST = "cdn.plot.ly"
+
+_SCRIPT_SRC = re.compile(r'<script[^>]*\ssrc="([^"]+)"', re.IGNORECASE)
+
+
 def _install_plotly_stub():
-    """Stand in for plotly.io.to_html when plotly is not installed.
-
-    The report's figure BUILDERS are pure and are what the tests mostly check.
-    Only `_render` needs plotly, so a stub keeps the suite runnable on a
-    machine without it -- while `test_report.py` still asserts how to_html is
-    called: fragments not documents, and the 3MB bundle embedded exactly once.
-
-    If plotly IS installed, this does nothing and the real library is used.
-    """
     try:
-        import plotly.io  # noqa: F401
+        import plotly.io
         return
     except ImportError:
         pass
@@ -34,9 +27,12 @@ def _install_plotly_stub():
                 default_width=None, **kwargs):
         js = ""
         if include_plotlyjs is True:
-            js = "<script>/*plotly-bundle*/</script>"
+            js = (f'<script type="text/javascript">/**\n'
+                  f'* {PLOTLY_BUNDLE_MARKER}0.0.0-stub\n*/</script>')
         elif include_plotlyjs == "cdn":
-            js = '<script src="https://cdn.plot.ly/plotly-2.min.js"></script>'
+            js = (f'<script charset="utf-8" '
+                  f'src="https://{PLOTLY_CDN_HOST}/plotly-2.32.0.min.js">'
+                  f'</script>')
         title = figure.get("layout", {}).get("title", {}).get("text", "")
         return (f'{js}<div class="plotly-graph-div" '
                 f'data-traces="{len(figure.get("data", []))}">{title}</div>')
@@ -50,3 +46,37 @@ def _install_plotly_stub():
 
 
 _install_plotly_stub()
+
+
+class HtmlDoc:
+
+    def __init__(self, document: str):
+        self.document = document
+
+    def __len__(self):
+        return len(self.document)
+
+    def count(self, needle: str) -> int:
+        return self.document.count(needle)
+
+    def contains(self, needle: str) -> bool:
+        return needle in self.document
+
+    def assert_contains(self, *needles: str) -> None:
+        missing = [n for n in needles if n not in self.document]
+        assert not missing, f"missing from the report: {missing}"
+
+    def assert_absent(self, *needles: str) -> None:
+        present = [n for n in needles if n in self.document]
+        assert not present, f"unexpectedly present in the report: {present}"
+
+    def script_srcs(self) -> list[str]:
+        return _SCRIPT_SRC.findall(self.document)
+
+    def embedded_bundle_count(self) -> int:
+        return self.document.count(PLOTLY_BUNDLE_MARKER)
+
+
+@pytest.fixture
+def html():
+    return HtmlDoc

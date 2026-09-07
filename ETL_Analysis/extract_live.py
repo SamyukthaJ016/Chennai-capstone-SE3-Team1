@@ -1,36 +1,3 @@
-"""Live extract: the real Fauxnance client.
-
-Same callable contract as `extract_fixtures.extract`, so `pipeline.py --live`
-swaps one for the other and transform and load are untouched.
-
-Not exercised yet: the key in circulation is a dummy. It is written to the
-sprint's requirements so it works the day a real key lands.
-
-THE KEY
-    Read from FAUXNANCE_API_KEY and from nowhere else. Never a literal in
-    source, a test, a fixture or a committed notebook. Never logged.
-
-THE CACHE
-    Raw responses are cached to `.cache/`, keyed by symbol and range, so
-    re-running the pipeline costs nothing against the 2000/day quota. The RAW
-    response is cached, not the cleaned frame, because changing the transform
-    is the thing you do most and it must not need a fresh pull.
-
-ERROR HANDLING
-    Four cases, told apart, because they need different answers:
-
-    | What happened            | How you know          | What we do            |
-    |--------------------------|-----------------------|-----------------------|
-    | Daily quota exhausted    | 429 + Retry-After     | Stop, say so plainly  |
-    | The request is wrong     | Other 4xx (401/404/400)| Fail symbol, carry on|
-    | Nothing reached service  | Connection error/timeout| Retry w/ backoff    |
-    | Response arrived, wrong  | 200 + bad candle      | Transform's problem   |
-
-    The fourth is deliberately absent from this module: a high below a low is
-    not an HTTP problem, and deciding about it here would put cleaning logic
-    in extract.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -42,7 +9,7 @@ from pathlib import Path
 
 try:
     import requests
-except ImportError:  # pragma: no cover - requests is a sprint dependency
+except ImportError:
     requests = None
 
 DEFAULT_BASE_URL = "https://y4t9nq2bqf.execute-api.eu-west-2.amazonaws.com/v1"
@@ -50,10 +17,6 @@ CACHE_DIR = Path(__file__).parent / ".cache"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = REPO_ROOT / ".env"
 
-# NAMES of environment variables. Not values -- putting a key here would make
-# it a literal in source, which the sprint forbids and which breaks the lookup
-# below, since os.environ would then be searched for a variable named after
-# the key itself.
 KEY_ENV_VAR = "FAUXNANCE_API_KEY"
 BASE_URL_ENV_VAR = "FAUXNANCE_BASE_URL"
 
@@ -65,29 +28,22 @@ log = logging.getLogger(__name__)
 
 
 class QuotaExhausted(RuntimeError):
-    """HTTP 429. Stop the run; sleeping until midnight UTC is not recovery."""
+    pass
 
 
 class BadRequest(RuntimeError):
-    """A 4xx that retrying would only repeat. Fail this symbol, carry on."""
+    pass
 
 
 class ServiceUnreachable(RuntimeError):
-    """Nothing reached the service after the retries were exhausted."""
+    pass
 
 
 class MissingApiKey(RuntimeError):
-    """FAUXNANCE_API_KEY is not set."""
+    pass
 
 
 def _read_env_file() -> dict:
-    """Parse .env into a dict.
-
-    Same parser the repo's scripts/db_config.py uses, so both halves of the
-    project read the same file the same way. Nothing here exports to the
-    process environment: the value is looked up and used, never leaked to
-    child processes.
-    """
     values = {}
     if not ENV_FILE.is_file():
         return values
@@ -101,7 +57,6 @@ def _read_env_file() -> dict:
 
 
 def _setting(name: str, default: str | None = None) -> str | None:
-    """Resolve a setting. Precedence: environment variable > .env > default."""
     return os.environ.get(name) or _read_env_file().get(name) or default
 
 
@@ -125,10 +80,9 @@ def _api_key() -> str:
     return key
 
 
-def _cache_path(symbol: str, start: str | None, end: str | None) -> Path:
-    """One file per symbol+range. Hashed so a symbol like FX:EUR/USD is a
-    legal filename."""
-    token = f"{symbol}|{start or ''}|{end or ''}"
+def _cache_path(symbol: str, start: str | None, end: str | None,
+                interval: str | None = None) -> Path:
+    token = f"{symbol}|{start or ''}|{end or ''}|{interval or ''}"
     digest = hashlib.sha256(token.encode()).hexdigest()[:12]
     safe = symbol.replace("/", "-").replace(":", "-")
     return CACHE_DIR / f"candles-{safe}-{digest}.json"
@@ -139,13 +93,9 @@ def extract(
     start: str | None = None,
     end: str | None = None,
     use_cache: bool = True,
+    interval: str | None = None,
 ) -> dict:
-    """Return the raw candles envelope for `symbol`, unchanged.
-
-    Hands the payload on exactly as received: no parsing, no cleaning, no
-    reshaping. That is the transform's job.
-    """
-    cache_file = _cache_path(symbol, start, end)
+    cache_file = _cache_path(symbol, start, end, interval)
 
     if use_cache and cache_file.exists():
         log.info("cache hit: %s (no quota used)", symbol)
@@ -156,8 +106,9 @@ def extract(
         raise ImportError("requests is required for the live client")
 
     url = f"{base_url()}/candles/{symbol}"
-    params = {k: v for k, v in (("start", start), ("end", end)) if v}
-    headers = {"X-Api-Key": _api_key()}  # never logged
+    params = {k: v for k, v in (("start", start), ("end", end),
+                                ("interval", interval)) if v}
+    headers = {"X-Api-Key": _api_key()}
 
     last_network_error = None
     for attempt in range(1, MAX_RETRIES + 1):
@@ -166,7 +117,6 @@ def extract(
                 url, headers=headers, params=params, timeout=TIMEOUT_SECONDS
             )
         except (requests.ConnectionError, requests.Timeout) as exc:
-            # Case 3: nothing reached the service. Retry with growing backoff.
             last_network_error = exc
             if attempt == MAX_RETRIES:
                 break
@@ -178,7 +128,6 @@ def extract(
             time.sleep(wait)
             continue
 
-        # Case 1: quota exhausted. Stop; do not retry, do not sleep to midnight.
         if response.status_code == 429:
             retry_after = response.headers.get("Retry-After", "unknown")
             raise QuotaExhausted(
@@ -186,11 +135,13 @@ def extract(
                 f"Retry-After={retry_after}s. Check GET /usage."
             )
 
-        # Case 2: the request itself is wrong. Retrying repeats the mistake.
         if 400 <= response.status_code < 500:
             meaning = {
                 400: "bad request (a range over ten years?)",
-                401: "bad or missing API key",
+                401: f"no API key was sent; set {KEY_ENV_VAR}",
+                403: (f"the key in {KEY_ENV_VAR} reached Fauxnance and was "
+                      f"refused. It is present but not accepted: check it is "
+                      f"current, not revoked, and issued for {base_url()}"),
                 404: f"Fauxnance does not serve {symbol}",
             }.get(response.status_code, "client error")
             raise BadRequest(f"HTTP {response.status_code} for {symbol}: {meaning}")
@@ -212,14 +163,12 @@ def extract(
 
 
 def health() -> dict:
-    """GET /health. Needs no key -- check this before assuming anything."""
     if requests is None:
         raise ImportError("requests is required for the live client")
     return requests.get(f"{base_url()}/health", timeout=TIMEOUT_SECONDS).json()
 
 
 def usage() -> dict:
-    """GET /usage. Check where you stand before assuming the API is broken."""
     if requests is None:
         raise ImportError("requests is required for the live client")
     return requests.get(

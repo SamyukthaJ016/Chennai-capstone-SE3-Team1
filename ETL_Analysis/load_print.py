@@ -1,20 +1,3 @@
-"""Load: the only part of the pipeline that writes.
-
-For now it writes to stdout. The analytical store is DuckDB and the eventual
-target is `contracts/analytics-schema.sql`, but nothing here imports duckdb --
-the print target keeps the pipeline runnable on a machine with no analytical
-store provisioned, and keeps this sprint's dependency set empty.
-
-Swapping the destination is a change to this module only. Extract and transform
-do not know where the data lands, which is the point of the split.
-
-Note on the eventual DuckDB target: `fact_trades` in the analytics contract is
-one row per ORDER, keyed on account, side and status. Candles have no account
-and no side, so they do NOT belong in that fact table. Market candles want
-their own table (symbol, date, OHLCV); `fact_trades` is loaded in Sprint 7 when
-the source becomes the platform's own order flow.
-"""
-
 from __future__ import annotations
 
 COLUMNS = [
@@ -45,10 +28,6 @@ def _fmt(value, width, numeric=True):
 
 
 def load(result: dict, show_rows: int | None = None) -> int:
-    """Write one transformed result. Returns the number of rows written.
-
-    `show_rows` caps the printed table; None prints every row.
-    """
     symbol = result["symbol"]
     rows = result["rows"]
     quarantined = result["quarantined"]
@@ -125,7 +104,6 @@ def load(result: dict, show_rows: int | None = None) -> int:
 
 
 def load_many(results: list[dict], show_rows: int | None = None) -> dict:
-    """Write several transformed results and return run totals."""
     totals = {"symbols": 0, "rows_loaded": 0, "rows_quarantined": 0,
               "rows_repaired": 0, "reasons": {}, "repairs": {}}
     for result in results:

@@ -8,27 +8,59 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from db_config import DbConfig, DbError, add_connection_args, quote_literal
+from db_config import REPO_ROOT, DbConfig, DbError, add_connection_args, quote_literal
 from make_seed import apply_fill, price
 
 SQLSTATE_RE = re.compile(r"ERROR:\s+([0-9A-Z]{5}):")
 
+ENTITY_DIR = (REPO_ROOT / "sprint-05-domain-engine" / "src" / "main" / "java"
+              / "com" / "team1" / "trading" / "domain" / "entity")
+
+FIELD_RE = re.compile(r"^\s*private\s+(?:final\s+|static\s+|transient\s+)*"
+                      r"[\w.<>,\[\]\s]+?\s+(\w+)\s*(?:=[^;]*)?;", re.M)
+ENUM_BODY_RE = re.compile(r"enum\s+\w+\s*\{(.*?)\}", re.S)
+
 EXPECTED_TABLES = [
-    "auth", "bank_account", "clients", "in_progress", "instruments", "orders",
+    "auth", "bank_account", "clients", "instruments", "order_history", "orders",
     "portfolio_holding", "portfolio_positions", "schema_migrations",
-    "transaction_failures", "transaction_success",
+]
+
+ENTITY_TABLES = {
+    "bank_account": ("BankAccount", {}),
+    "clients": ("Client", {}),
+    "auth": ("Auth", {}),
+    "instruments": ("Instrument", {}),
+    "orders": ("Order", {}),
+    "order_history": ("OrderHistory", {}),
+    "portfolio_holding": ("PortfolioHolding", {"portifolioid": "holding_id"}),
+    "portfolio_positions": ("PortfolioPosition", {"portifolioid": "position_id"}),
+}
+
+ENUM_CONSTRAINTS = [
+    ("chk_orders_status", "OrderStatus"),
+    ("chk_orders_order_type", "OrderType"),
+    ("chk_orders_side", "OrderSide"),
+    ("chk_clients_account_state", "AccountStatus"),
+    ("chk_order_history_previous_status", "OrderStatus"),
+    ("chk_order_history_new_status", "OrderStatus"),
 ]
 
 MONEY_COLUMNS = [
-    ("bank_account", "balance"),
-    ("orders", "price_per_unit"),
-    ("transaction_success", "value"),
-    ("transaction_failures", "value"),
-    ("portfolio_holding", "avg_price"),
-    ("portfolio_positions", "avg_price"),
+    ("bank_account", "account_balance"),
+    ("clients", "wallet_balance"),
+    ("orders", "price"),
+    ("orders", "executed_price"),
+    ("orders", "quantity"),
+    ("portfolio_holding", "price_per_unit"),
+    ("portfolio_holding", "overall_gains"),
+    ("portfolio_positions", "price_per_unit"),
+    ("portfolio_positions", "overall_gains"),
 ]
 
 INEXACT_TYPES = {"real", "double precision", "float", "float4", "float8", "money"}
+
+HOLDING_BOOK = "HOLDING"
+POSITION_BOOK = "POSITION"
 
 
 class CheckFailed(AssertionError):
@@ -50,10 +82,56 @@ def sqlstate_of(proc):
     return match.group(1) if match else None
 
 
+def snake(name):
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+
+
+def _entity_source(class_name):
+    for candidate in (ENTITY_DIR / (class_name + ".java"),
+                      ENTITY_DIR / "types" / (class_name + ".java")):
+        if candidate.is_file():
+            return candidate.read_text(encoding="utf-8")
+    raise CheckFailed(
+        class_name + ".java was not found under " + str(ENTITY_DIR)
+        + "\n  The database is meant to mirror the domain entities, so parity "
+        "cannot be checked without them."
+    )
+
+
+def entity_fields(class_name):
+    text = _entity_source(class_name)
+    fields = FIELD_RE.findall(text)
+    parent = re.search(r"class\s+\w+\s+extends\s+(\w+)", text)
+    if parent:
+        fields = entity_fields(parent.group(1)) + fields
+    return fields
+
+
+def entity_columns(table):
+    class_name, aliases = ENTITY_TABLES[table]
+    columns = []
+    for field in entity_fields(class_name):
+        column = aliases.get(field, snake(field))
+        if column not in columns:
+            columns.append(column)
+    return columns
+
+
+def enum_constants(enum_name):
+    body = ENUM_BODY_RE.search(_entity_source(enum_name))
+    require(body, enum_name + ".java does not look like an enum")
+    found = []
+    for token in body.group(1).replace("\n", " ").split(","):
+        token = token.strip()
+        if re.fullmatch(r"[A-Z][A-Z0-9_]*", token):
+            found.append(token)
+    require(found, enum_name + " declares no constants")
+    return set(found)
+
+
 class Verifier:
     def __init__(self, cfg):
         self.cfg = cfg
-
 
     def scalar(self, sql):
         return self.cfg.scalar(sql)
@@ -64,6 +142,19 @@ class Verifier:
     def count(self, sql):
         return int(self.scalar(sql) or "0")
 
+    def columns_of(self, table):
+        return [r[0] for r in self.rows(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema='public' AND table_name=" + quote_literal(table)
+            + " ORDER BY ordinal_position;"
+        )]
+
+    def constraint_def(self, name):
+        return self.scalar(
+            "SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c "
+            "JOIN pg_namespace n ON n.oid = c.connamespace "
+            "WHERE n.nspname = 'public' AND c.conname = " + quote_literal(name) + ";"
+        )
 
     def expect_rejected(self, sql, sqlstate, what):
         proc = self.cfg.run(script=rollback_script(sql), verbose_errors=True)
@@ -141,40 +232,83 @@ def a03_positions_mirrors_holding(v):
         equal(positions[col], holding[col], "portfolio_positions." + col + " type/nullability")
 
 
-def a04_version_column(v):
-    dtype = v.scalar(
-        "SELECT data_type FROM information_schema.columns "
-        "WHERE table_name='bank_account' AND column_name='version';"
+def a04_every_entity_has_a_table(v):
+    found = {r[0] for r in v.rows(
+        "SELECT table_name FROM information_schema.tables "
+        "WHERE table_schema='public' AND table_type='BASE TABLE';"
+    )}
+    missing = sorted(
+        table + " (" + ENTITY_TABLES[table][0] + ".java)"
+        for table in ENTITY_TABLES if table not in found
     )
-    require(dtype == "integer", "bank_account.version must be an integer, got " + repr(dtype))
+    require(not missing, "entity classes with no table: " + ", ".join(missing))
 
 
-def a05_product_type_column(v):
+def a05_tables_match_their_entities(v):
+    problems = []
+    for table in sorted(ENTITY_TABLES):
+        want = entity_columns(table)
+        got = v.columns_of(table)
+        if not got:
+            problems.append(table + ": table does not exist")
+            continue
+        missing = [c for c in want if c not in got]
+        extra = [c for c in got if c not in want]
+        if missing:
+            problems.append(
+                table + " is missing column(s) the " + ENTITY_TABLES[table][0]
+                + " entity declares: " + ", ".join(missing))
+        if extra:
+            problems.append(
+                table + " has column(s) no field of " + ENTITY_TABLES[table][0]
+                + " maps to: " + ", ".join(extra))
+    require(not problems, "schema and entities disagree:\n      " + "\n      ".join(problems))
+
+
+def a06_order_type_column(v):
     dtype = v.scalar(
         "SELECT data_type FROM information_schema.columns "
-        "WHERE table_name='orders' AND column_name='product_type';"
+        "WHERE table_name='orders' AND column_name='order_type';"
     )
     require(dtype == "character varying",
-            "orders.product_type missing or wrong type: " + repr(dtype))
+            "orders.order_type missing or wrong type: " + repr(dtype))
 
     nullable = v.scalar(
         "SELECT is_nullable FROM information_schema.columns "
-        "WHERE table_name='orders' AND column_name='product_type';"
+        "WHERE table_name='orders' AND column_name='order_type';"
     )
-    equal(nullable, "NO", "orders.product_type nullability")
+    equal(nullable, "NO", "orders.order_type nullability")
 
     default = v.scalar(
         "SELECT coalesce(column_default, '') FROM information_schema.columns "
-        "WHERE table_name='orders' AND column_name='product_type';"
+        "WHERE table_name='orders' AND column_name='order_type';"
     )
     require(
         default == "",
-        "orders.product_type must have NO default (" + repr(default) + "): a default would "
+        "orders.order_type must have NO default (" + repr(default) + "): a default would "
         "let a caller that forgot to set it silently book an intraday fill into holdings",
     )
 
 
-def a06_money_is_exact(v):
+def a07_instruments_are_keyed_by_symbol(v):
+    dtype = v.scalar(
+        "SELECT data_type FROM information_schema.columns "
+        "WHERE table_name='instruments' AND column_name='instrument_id';"
+    )
+    require(
+        dtype == "character varying",
+        "instruments.instrument_id must be the symbol string the entities use, got "
+        + repr(dtype),
+    )
+    for table in ("orders", "portfolio_holding", "portfolio_positions"):
+        referencing = v.scalar(
+            "SELECT data_type FROM information_schema.columns WHERE table_name="
+            + quote_literal(table) + " AND column_name='instrument_id';"
+        )
+        equal(referencing, "character varying", table + ".instrument_id type")
+
+
+def a08_money_is_exact(v):
     for table, column in MONEY_COLUMNS:
         dtype = v.scalar(
             "SELECT data_type FROM information_schema.columns WHERE table_name="
@@ -187,7 +321,7 @@ def a06_money_is_exact(v):
         )
 
 
-def a07_no_inexact_numeric_anywhere(v):
+def a09_no_inexact_numeric_anywhere(v):
     bad = v.rows(
         "SELECT table_name, column_name, data_type FROM information_schema.columns "
         "WHERE table_schema='public' AND data_type IN "
@@ -200,7 +334,7 @@ def a07_no_inexact_numeric_anywhere(v):
     )
 
 
-def a08_every_migration_recorded(v):
+def a10_every_migration_recorded(v):
     from db_config import MIGRATIONS_DIR
 
     on_disk = sorted(p.name for p in MIGRATIONS_DIR.glob("*.sql"))
@@ -215,7 +349,7 @@ def a08_every_migration_recorded(v):
     )
 
 
-def a09_numbered_in_order(v):
+def a11_numbered_in_order(v):
     from db_config import MIGRATIONS_DIR
 
     names = sorted(p.name for p in MIGRATIONS_DIR.glob("*.sql"))
@@ -238,22 +372,26 @@ def b01_at_least_three_checks(v):
     require(n >= 3, "expected at least 3 named CHECK constraints, found " + str(n))
 
 
-def b02_account_state_check(v):
-    definition = v.scalar(
-        "SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c "
-        "WHERE c.conname = 'chk_clients_status';"
-    )
-    require(definition, "chk_clients_status (the account-state CHECK) does not exist")
-    for state in ("ACTIVE", "SUSPENDED", "CLOSED"):
-        require(state in definition,
-                "chk_clients_status does not mention " + state + ": " + definition)
+def b02_check_vocabularies_match_the_enums(v):
+    problems = []
+    for conname, enum_name in ENUM_CONSTRAINTS:
+        definition = v.constraint_def(conname)
+        if not definition:
+            problems.append(conname + " does not exist")
+            continue
+        in_sql = set(re.findall(r"'([A-Z][A-Z0-9_]*)'", definition))
+        in_java = enum_constants(enum_name)
+        if in_sql != in_java:
+            problems.append(
+                conname + " allows " + repr(sorted(in_sql)) + " but "
+                + enum_name + ".java declares " + repr(sorted(in_java)))
+    require(not problems,
+            "CHECK vocabularies disagree with the enums:\n      "
+            + "\n      ".join(problems))
 
 
 def b03_idempotency_unique(v):
-    definition = v.scalar(
-        "SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c "
-        "WHERE c.conname = 'uq_orders_idempotency_key' AND c.contype = 'u';"
-    )
+    definition = v.constraint_def("uq_orders_idempotency_key")
     require(
         definition and "idempotency_key" in definition,
         "UNIQUE constraint on orders.idempotency_key is missing - idempotency must be "
@@ -264,12 +402,11 @@ def b03_idempotency_unique(v):
 def b04_foreign_keys_present(v):
     expected = {
         ("clients", "bank_account"),
+        ("bank_account", "clients"),
         ("auth", "clients"),
         ("orders", "clients"),
         ("orders", "instruments"),
-        ("in_progress", "orders"),
-        ("transaction_success", "orders"),
-        ("transaction_failures", "orders"),
+        ("order_history", "orders"),
         ("portfolio_holding", "clients"),
         ("portfolio_holding", "instruments"),
         ("portfolio_positions", "clients"),
@@ -293,10 +430,7 @@ def b04_foreign_keys_present(v):
 
 
 def b05_holding_forbids_negative(v):
-    definition = v.scalar(
-        "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
-        "WHERE conname = 'chk_portfolio_holding_quantity_non_negative';"
-    )
+    definition = v.constraint_def("chk_portfolio_holding_quantity_non_negative")
     require(definition, "portfolio_holding is missing its non-negative quantity CHECK")
     require("quantity" in definition, "unexpected definition: " + definition)
 
@@ -320,26 +454,33 @@ def b07_unique_portfolio_keys(v):
         ("portfolio_holding", "uq_portfolio_holding_client_instrument"),
         ("portfolio_positions", "uq_portfolio_positions_client_instrument"),
     ):
-        definition = v.scalar(
-            "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname="
-            + quote_literal(conname) + ";"
-        )
-        require(definition, table + " is missing UNIQUE (client_id, instrument_id)")
+        require(v.constraint_def(conname),
+                table + " is missing UNIQUE (client_id, instrument_id)")
 
 
-def b08_terminal_tables_unique_per_order(v):
-    for table in ("transaction_success", "transaction_failures"):
-        n = v.count(
-            "SELECT count(*) FROM pg_constraint c JOIN pg_class t ON t.oid=c.conrelid "
-            "WHERE t.relname=" + quote_literal(table) + " AND c.contype='u' "
-            "AND pg_get_constraintdef(c.oid) LIKE '%order_id%';"
-        )
-        require(n >= 1, table + " must have a UNIQUE constraint on order_id")
+def b08_order_history_records_a_real_transition(v):
+    definition = v.constraint_def("chk_order_history_status_actually_changed")
+    require(
+        definition,
+        "order_history must refuse an event whose previous_status equals its new_status - "
+        "an audit row that records no change is noise",
+    )
+
+
+def b09_bank_account_and_clients_reference_each_other(v):
+    require(v.constraint_def("fk_bank_account_client"),
+            "bank_account.client_id has no foreign key to clients")
+    definition = v.constraint_def("fk_bank_account_client")
+    require(
+        "DEFERRABLE" in definition.upper(),
+        "fk_bank_account_client must be DEFERRABLE: bank_account and clients point at "
+        "each other, so one of the two has to be checked at COMMIT for either to load",
+    )
 
 
 _NEW_ORDER = (
-    "INSERT INTO orders (instrument_id, client_id, price_per_unit, type, "
-    "product_type, quantity, exchange, idempotency_key) VALUES "
+    "INSERT INTO orders (client_id, account_id, instrument_id, order_type, side, "
+    "quantity, price, idempotency_key) VALUES "
 )
 
 
@@ -347,32 +488,32 @@ def c01_duplicate_idempotency_key_rejected(v):
     existing = v.scalar("SELECT idempotency_key FROM orders ORDER BY order_id LIMIT 1;")
     require(existing, "no seeded orders to test against")
     v.expect_rejected(
-        _NEW_ORDER + "(1, 1, 100.0000, 'BUY', 'DELIVERY', 1, 'NSE', "
+        _NEW_ORDER + "(1, 1, 'RELIANCE', 'HOLDING', 'BUY', 1, 100.0000, "
         + quote_literal(existing) + ");",
         "23505",
         "a second order reusing an existing idempotency_key",
     )
 
 
-def c02_bad_product_type_rejected(v):
+def c02_bad_order_type_rejected(v):
     v.expect_rejected(
-        _NEW_ORDER + "(1, 1, 100.0000, 'BUY', 'SWING', 1, 'NSE', 'verify-bad-product');",
+        _NEW_ORDER + "(1, 1, 'RELIANCE', 'SWING', 'BUY', 1, 100.0000, 'verify-bad-type');",
         "23514",
-        "an order with product_type = 'SWING'",
+        "an order with order_type = 'SWING'",
     )
 
 
 def c03_bad_side_rejected(v):
     v.expect_rejected(
-        _NEW_ORDER + "(1, 1, 100.0000, 'HOLD', 'DELIVERY', 1, 'NSE', 'verify-bad-side');",
+        _NEW_ORDER + "(1, 1, 'RELIANCE', 'HOLDING', 'HOLD', 1, 100.0000, 'verify-bad-side');",
         "23514",
-        "an order with type = 'HOLD'",
+        "an order with side = 'HOLD'",
     )
 
 
 def c04_zero_quantity_rejected(v):
     v.expect_rejected(
-        _NEW_ORDER + "(1, 1, 100.0000, 'BUY', 'DELIVERY', 0, 'NSE', 'verify-zero-qty');",
+        _NEW_ORDER + "(1, 1, 'RELIANCE', 'HOLDING', 'BUY', 0, 100.0000, 'verify-zero-qty');",
         "23514",
         "an order with quantity = 0",
     )
@@ -380,42 +521,50 @@ def c04_zero_quantity_rejected(v):
 
 def c05_missing_client_rejected(v):
     v.expect_rejected(
-        _NEW_ORDER + "(1, 99999, 100.0000, 'BUY', 'DELIVERY', 1, 'NSE', 'verify-no-client');",
+        _NEW_ORDER + "(99999, 1, 'RELIANCE', 'HOLDING', 'BUY', 1, 100.0000, 'verify-no-client');",
         "23503",
         "an order for a client_id that does not exist",
     )
 
 
-def c06_bad_client_status_rejected(v):
+def c06_missing_instrument_rejected(v):
     v.expect_rejected(
-        "UPDATE clients SET status = 'DORMANT' WHERE client_id = 1;",
-        "23514",
-        "setting a client to an undefined status",
+        _NEW_ORDER + "(1, 1, 'NOSUCHSYM', 'HOLDING', 'BUY', 1, 100.0000, 'verify-no-instr');",
+        "23503",
+        "an order for a symbol that is not listed",
     )
 
 
-def c07_suspension_is_reversible(v):
+def c07_bad_client_state_rejected(v):
+    v.expect_rejected(
+        "UPDATE clients SET account_state = 'DORMANT' WHERE client_id = 1;",
+        "23514",
+        "setting a client to an undefined account_state",
+    )
+
+
+def c08_suspension_is_reversible(v):
     v.expect_accepted(
         rollback_script(
-            "UPDATE clients SET status = 'SUSPENDED' WHERE client_id = 1;\n"
-            "UPDATE clients SET status = 'ACTIVE'    WHERE client_id = 1;\n"
-            "UPDATE clients SET status = 'SUSPENDED' WHERE client_id = 1;"
+            "UPDATE clients SET account_state = 'SUSPENDED' WHERE client_id = 1;\n"
+            "UPDATE clients SET account_state = 'ACTIVE'    WHERE client_id = 1;\n"
+            "UPDATE clients SET account_state = 'SUSPENDED' WHERE client_id = 1;"
         ),
         "ACTIVE <-> SUSPENDED round trip",
     )
 
 
-def c08_closed_is_terminal(v):
-    closed = v.scalar("SELECT client_id FROM clients WHERE status = 'CLOSED' LIMIT 1;")
+def c09_closed_is_terminal(v):
+    closed = v.scalar("SELECT client_id FROM clients WHERE account_state = 'CLOSED' LIMIT 1;")
     require(closed, "seed data has no CLOSED client to test with")
     v.expect_rejected(
-        "UPDATE clients SET status = 'ACTIVE' WHERE client_id = " + closed + ";",
+        "UPDATE clients SET account_state = 'ACTIVE' WHERE client_id = " + closed + ";",
         "23514",
         "reopening a CLOSED client",
     )
 
 
-def c09_client_never_deleted(v):
+def c10_client_never_deleted(v):
     v.expect_rejected(
         "DELETE FROM clients WHERE client_id = 1;",
         "23001",
@@ -423,22 +572,23 @@ def c09_client_never_deleted(v):
     )
 
 
-def c10_instrument_never_deleted(v):
+def c11_instrument_never_deleted(v):
     v.expect_rejected(
-        "DELETE FROM instruments WHERE instrument_id = 1;",
+        "DELETE FROM instruments WHERE instrument_id = 'RELIANCE';",
         "23001",
         "deleting an instrument row",
     )
 
 
-def c11_delisting_keeps_orders_resolvable(v):
+def c12_delisting_keeps_orders_resolvable(v):
     out = v.expect_accepted(
         "BEGIN;\n"
-        "UPDATE instruments SET is_active = FALSE, delisted_on = now() WHERE instrument_id = 1;\n"
+        "UPDATE instruments SET active = FALSE, updated_on = now() "
+        "WHERE instrument_id = 'RELIANCE';\n"
         "SELECT count(*) FROM orders o JOIN instruments i USING (instrument_id) "
-        "WHERE i.instrument_id = 1;\n"
+        "WHERE i.instrument_id = 'RELIANCE';\n"
         "ROLLBACK;\n",
-        "delisting instrument 1",
+        "delisting RELIANCE",
     )
     numbers = [int(t) for t in re.findall(r"^\s*(\d+)\s*$", out, re.M)]
     require(
@@ -447,116 +597,127 @@ def c11_delisting_keeps_orders_resolvable(v):
     )
 
 
-def c12_delisted_must_have_date(v):
+def c13_deactivating_without_a_date_is_accepted(v):
+    v.expect_accepted(
+        rollback_script(
+            "UPDATE instruments SET active = FALSE WHERE instrument_id = 'RELIANCE';"
+        ),
+        "Instrument.deactivate() leaves updatedOn null, so the database must accept it",
+    )
+
+
+def c14_bad_order_status_rejected(v):
     v.expect_rejected(
-        "UPDATE instruments SET is_active = FALSE WHERE instrument_id = 1;",
+        "UPDATE orders SET status = 'SUCCESS' WHERE order_id = 1;",
         "23514",
-        "delisting an instrument without recording delisted_on",
+        "an order status outside the OrderStatus enum",
     )
 
 
-def c13_single_terminal_state(v):
-    order_id = v.scalar("SELECT order_id FROM transaction_success ORDER BY order_id LIMIT 1;")
-    require(order_id, "seed data has no successful order to test with")
+def c15_filled_without_executed_price_rejected(v):
     v.expect_rejected(
-        "INSERT INTO transaction_failures (order_id, quantity, value, reason_for_failure) "
-        "VALUES (" + order_id + ", 1, 1.00, 'verify: should be impossible');",
+        _NEW_ORDER.replace("idempotency_key)", "idempotency_key, status)")
+        + "(1, 1, 'RELIANCE', 'HOLDING', 'BUY', 1, 100.0000, 'verify-filled-noprice', "
+          "'FILLED');",
         "23514",
-        "failing an order that already succeeded",
+        "a FILLED order with no executed_price",
     )
 
 
-def c14_terminal_insert_updates_order_status(v):
-    order_id = v.scalar("SELECT order_id FROM orders WHERE status = 'RECEIVED' LIMIT 1;")
-    require(order_id, "seed data has no RECEIVED order to test with")
-    out = v.expect_accepted(
-        "BEGIN;\n"
-        "INSERT INTO transaction_success (order_id, quantity, value) VALUES ("
-        + order_id + ", 1, 1.00);\n"
-        "SELECT status FROM orders WHERE order_id = " + order_id + ";\n"
-        "ROLLBACK;\n",
-        "settling a RECEIVED order",
-    )
-    require(
-        "SUCCESS" in out,
-        "inserting into transaction_success did not move orders.status to SUCCESS: " + repr(out),
-    )
-
-
-def c15_holding_rejects_negative_quantity(v):
+def c16_executed_price_only_when_filled(v):
     v.expect_rejected(
-        "INSERT INTO portfolio_holding (client_id, instrument_id, quantity, avg_price) "
-        "VALUES (3, 5, -10, 100.0000);",
+        _NEW_ORDER.replace("idempotency_key)", "idempotency_key, executed_price)")
+        + "(1, 1, 'RELIANCE', 'HOLDING', 'BUY', 1, 100.0000, 'verify-newprice', 100.0000);",
+        "23514",
+        "an executed_price on an order that is still NEW",
+    )
+
+
+def c17_holding_rejects_negative_quantity(v):
+    v.expect_rejected(
+        "INSERT INTO portfolio_holding (client_id, instrument_id, quantity, price_per_unit) "
+        "VALUES (3, 'ICICIBANK', -10, 100.0000);",
         "23514",
         "a negative quantity in portfolio_holding",
     )
 
 
-def c16_positions_accepts_negative_quantity(v):
+def c18_positions_accepts_negative_quantity(v):
     v.expect_accepted(
         rollback_script(
-            "INSERT INTO portfolio_positions (client_id, instrument_id, quantity, avg_price) "
-            "VALUES (3, 5, -10, 100.0000);"
+            "INSERT INTO portfolio_positions (client_id, instrument_id, quantity, "
+            "price_per_unit) VALUES (3, 'ICICIBANK', -10, 100.0000);"
         ),
         "a negative (short) quantity in portfolio_positions",
     )
 
 
-def c17_one_portfolio_row_per_client_instrument(v):
+def c19_one_portfolio_row_per_client_instrument(v):
     existing = v.rows(
         "SELECT client_id, instrument_id FROM portfolio_holding ORDER BY holding_id LIMIT 1;"
     )
     require(existing, "no seeded holdings to test against")
     client_id, instrument_id = existing[0][0], existing[0][1]
     v.expect_rejected(
-        "INSERT INTO portfolio_holding (client_id, instrument_id, quantity, avg_price) "
-        "VALUES (" + client_id + ", " + instrument_id + ", 1, 1.0000);",
+        "INSERT INTO portfolio_holding (client_id, instrument_id, quantity, price_per_unit) "
+        "VALUES (" + client_id + ", " + quote_literal(instrument_id) + ", 1, 1.0000);",
         "23505",
         "a second holding row for the same (client, instrument)",
     )
 
 
-def c18_optimistic_concurrency_detects_the_loser(v):
-    account = v.scalar("SELECT account_number FROM bank_account ORDER BY account_number LIMIT 1;")
-    require(account, "no seeded bank accounts to test with")
+def c20_optimistic_concurrency_detects_the_loser(v):
+    email = v.scalar("SELECT email FROM auth ORDER BY email LIMIT 1;")
+    require(email, "no seeded credentials to test with")
     v.expect_accepted(
         "BEGIN;\n"
         "DO $verify$\n"
         "DECLARE stale INT; n INT;\n"
         "BEGIN\n"
-        "  SELECT version INTO stale FROM bank_account WHERE account_number = "
-        + quote_literal(account) + ";\n"
-        "  UPDATE bank_account SET balance = balance + 1, version = version + 1\n"
-        "   WHERE account_number = " + quote_literal(account) + " AND version = stale;\n"
+        "  SELECT version INTO stale FROM auth WHERE email = " + quote_literal(email) + ";\n"
+        "  UPDATE auth SET password_hash = 'rotated-1', updated = now(), "
+        "version = version + 1\n"
+        "   WHERE email = " + quote_literal(email) + " AND version = stale;\n"
         "  GET DIAGNOSTICS n = ROW_COUNT;\n"
-        "  IF n <> 1 THEN RAISE EXCEPTION 'first writer should have won, updated % row(s)', n; END IF;\n"
-        "  UPDATE bank_account SET balance = balance + 1, version = version + 1\n"
-        "   WHERE account_number = " + quote_literal(account) + " AND version = stale;\n"
+        "  IF n <> 1 THEN RAISE EXCEPTION 'first writer should have won, updated % row(s)', n; "
+        "END IF;\n"
+        "  UPDATE auth SET password_hash = 'rotated-2', updated = now(), "
+        "version = version + 1\n"
+        "   WHERE email = " + quote_literal(email) + " AND version = stale;\n"
         "  GET DIAGNOSTICS n = ROW_COUNT;\n"
-        "  IF n <> 0 THEN RAISE EXCEPTION 'stale writer should have lost, updated % row(s)', n; END IF;\n"
+        "  IF n <> 0 THEN RAISE EXCEPTION 'stale writer should have lost, updated % row(s)', n; "
+        "END IF;\n"
         "END\n"
         "$verify$;\n"
         "ROLLBACK;\n",
-        "optimistic concurrency on bank_account.version",
+        "optimistic concurrency on auth.version",
     )
 
 
-def c19_negative_balance_rejected(v):
+def c21_negative_bank_balance_rejected(v):
     account = v.scalar("SELECT account_number FROM bank_account ORDER BY account_number LIMIT 1;")
     v.expect_rejected(
-        "UPDATE bank_account SET balance = -1 WHERE account_number = "
+        "UPDATE bank_account SET account_balance = -1 WHERE account_number = "
         + quote_literal(account) + ";",
         "23514",
         "driving a bank_account balance negative",
     )
 
 
-def c20_sequences_resynced_past_seed(v):
+def c22_negative_wallet_balance_rejected(v):
+    v.expect_rejected(
+        "UPDATE clients SET wallet_balance = -1 WHERE client_id = 1;",
+        "23514",
+        "driving a client wallet balance negative",
+    )
+
+
+def c23_sequences_resynced_past_seed(v):
     max_id = v.count("SELECT coalesce(max(order_id), 0) FROM orders;")
     out = v.expect_accepted(
         "BEGIN;\n"
         + _NEW_ORDER
-        + "(1, 1, 100.0000, 'BUY', 'DELIVERY', 1, 'NSE', 'verify-sequence-probe') "
+        + "(1, 1, 'RELIANCE', 'HOLDING', 'BUY', 1, 100.0000, 'verify-sequence-probe') "
           "RETURNING order_id;\n"
         "ROLLBACK;\n",
         "inserting an order without an explicit id",
@@ -570,244 +731,275 @@ def c20_sequences_resynced_past_seed(v):
     )
 
 
-def c22_in_progress_cannot_contradict_its_order(v):
-    row = v.rows(
-        "SELECT order_id, instrument_id FROM orders o WHERE EXISTS "
-        "(SELECT 1 FROM instruments i WHERE i.instrument_id <> o.instrument_id) LIMIT 1;"
-    )
-    require(row, "no orders to test against")
-    order_id, instrument_id = row[0][0], row[0][1]
-    other = v.scalar(
-        "SELECT instrument_id FROM instruments WHERE instrument_id <> "
-        + instrument_id + " ORDER BY instrument_id LIMIT 1;"
-    )
-    require(other, "need a second instrument to test against")
-    v.expect_rejected(
-        "INSERT INTO in_progress (order_id, instrument_id, quantity) VALUES ("
-        + order_id + ", " + other + ", 1);",
-        "23503",
-        "queueing an order against a different instrument than the order names",
-    )
-
-
-def c23_in_progress_accepts_the_matching_instrument(v):
-    row = v.rows("SELECT order_id, instrument_id FROM orders LIMIT 1;")
-    require(row, "no orders to test against")
-    v.expect_accepted(
-        rollback_script(
-            "INSERT INTO in_progress (order_id, instrument_id, quantity) VALUES ("
-            + row[0][0] + ", " + row[0][1] + ", 1);"
-        ),
-        "queueing an order against its own instrument",
-    )
-
-
-def c21_blank_password_rejected(v):
+def c24_blank_password_rejected(v):
     email = v.scalar("SELECT email FROM clients ORDER BY client_id LIMIT 1;")
     v.expect_rejected(
-        "UPDATE auth SET password = '   ' WHERE email = " + quote_literal(email) + ";",
+        "UPDATE auth SET password_hash = '   ' WHERE email = " + quote_literal(email) + ";",
         "23514",
-        "a blank auth password",
+        "a blank auth password_hash",
     )
 
 
-def d01_success_orders_have_one_success_row(v):
+def c25_history_for_a_missing_order_rejected(v):
+    v.expect_rejected(
+        "INSERT INTO order_history (order_id, event_type, previous_status, new_status) "
+        "VALUES (99999, 'FILLED', 'NEW', 'FILLED');",
+        "23503",
+        "an audit row for an order that does not exist",
+    )
+
+
+def c26_history_accepts_a_real_transition(v):
+    order_id = v.scalar("SELECT order_id FROM orders WHERE status = 'NEW' LIMIT 1;")
+    require(order_id, "seed data has no NEW order to test with")
+    v.expect_accepted(
+        rollback_script(
+            "INSERT INTO order_history (order_id, event_type, previous_status, new_status) "
+            "VALUES (" + order_id + ", 'CANCELLED', 'NEW', 'CANCELLED');"
+        ),
+        "recording a NEW -> CANCELLED transition",
+    )
+
+
+def c27_history_rejects_an_unknown_status(v):
+    order_id = v.scalar("SELECT order_id FROM orders LIMIT 1;")
+    v.expect_rejected(
+        "INSERT INTO order_history (order_id, event_type, previous_status, new_status) "
+        "VALUES (" + order_id + ", 'SETTLED', 'NEW', 'SETTLED');",
+        "23514",
+        "an audit row naming a status outside the OrderStatus enum",
+    )
+
+
+def d01_filled_orders_have_an_executed_price(v):
     n = v.count(
-        "SELECT count(*) FROM orders o WHERE o.status = 'SUCCESS' AND NOT EXISTS "
-        "(SELECT 1 FROM transaction_success t WHERE t.order_id = o.order_id);"
+        "SELECT count(*) FROM orders WHERE status = 'FILLED' AND executed_price IS NULL;"
     )
-    equal(n, 0, "SUCCESS orders with no transaction_success row")
+    equal(n, 0, "FILLED orders with no executed_price")
 
 
-def d02_failed_orders_have_one_failure_row(v):
+def d02_unfinished_orders_have_no_executed_price(v):
     n = v.count(
-        "SELECT count(*) FROM orders o WHERE o.status = 'FAILED' AND NOT EXISTS "
-        "(SELECT 1 FROM transaction_failures t WHERE t.order_id = o.order_id);"
+        "SELECT count(*) FROM orders WHERE status <> 'FILLED' AND executed_price IS NOT NULL;"
     )
-    equal(n, 0, "FAILED orders with no transaction_failures row")
+    equal(n, 0, "orders that were never filled but carry an executed_price")
 
 
-def d03_no_order_in_both_terminal_tables(v):
+def d03_every_order_has_a_created_event(v):
     n = v.count(
-        "SELECT count(*) FROM transaction_success s "
-        "JOIN transaction_failures f USING (order_id);"
+        "SELECT count(*) FROM orders o WHERE NOT EXISTS ("
+        "SELECT 1 FROM order_history h WHERE h.order_id = o.order_id "
+        "AND h.event_type = 'CREATED');"
     )
-    equal(n, 0, "orders present in BOTH terminal tables")
+    equal(n, 0, "orders with no CREATED row in order_history")
 
 
-def d04_status_agrees_with_terminal_tables(v):
+def d04_last_event_agrees_with_order_status(v):
+    problems = v.rows(
+        "SELECT o.order_id, o.status, last.new_status FROM orders o "
+        "JOIN LATERAL (SELECT h.new_status FROM order_history h "
+        "              WHERE h.order_id = o.order_id "
+        "              ORDER BY h.event_timestamp DESC, h.history_id DESC LIMIT 1) last "
+        "  ON TRUE "
+        "WHERE last.new_status IS DISTINCT FROM o.status;"
+    )
+    require(
+        not problems,
+        "orders whose latest audit event disagrees with orders.status: "
+        + ", ".join("order " + r[0] + " is " + r[1] + " but history ends at " + r[2]
+                    for r in problems),
+    )
+
+
+def d05_history_records_no_self_transitions(v):
     n = v.count(
-        "SELECT count(*) FROM orders o "
-        "WHERE (EXISTS (SELECT 1 FROM transaction_success t WHERE t.order_id=o.order_id) "
-        "       AND o.status <> 'SUCCESS') "
-        "   OR (EXISTS (SELECT 1 FROM transaction_failures t WHERE t.order_id=o.order_id) "
-        "       AND o.status <> 'FAILED');"
+        "SELECT count(*) FROM order_history "
+        "WHERE previous_status IS NOT NULL AND previous_status = new_status;"
     )
-    equal(n, 0, "orders whose status disagrees with their terminal table")
-
-
-def d05_non_terminal_orders_have_no_terminal_row(v):
-    n = v.count(
-        "SELECT count(*) FROM orders o WHERE o.status IN ('RECEIVED','IN_PROGRESS') AND ("
-        "EXISTS (SELECT 1 FROM transaction_success t WHERE t.order_id=o.order_id) OR "
-        "EXISTS (SELECT 1 FROM transaction_failures t WHERE t.order_id=o.order_id));"
-    )
-    equal(n, 0, "unfinished orders that already have a terminal row")
+    equal(n, 0, "audit rows that record a transition to the status already held")
 
 
 def d06_all_three_client_states_present(v):
-    found = {r[0] for r in v.rows("SELECT DISTINCT status FROM clients;")}
-    missing = {"ACTIVE", "SUSPENDED", "CLOSED"} - found
-    require(not missing, "seed data does not exercise client state(s): " + ", ".join(sorted(missing)))
+    found = {r[0] for r in v.rows("SELECT DISTINCT account_state FROM clients;")}
+    missing = enum_constants("AccountStatus") - found
+    require(not missing,
+            "seed data does not exercise client state(s): " + ", ".join(sorted(missing)))
 
 
-def d07_delisted_instrument_still_referenced(v):
+def d07_every_order_status_exercised(v):
+    found = {r[0] for r in v.rows("SELECT DISTINCT status FROM orders;")}
+    missing = enum_constants("OrderStatus") - found
+    require(not missing,
+            "seed data never reaches order status: " + ", ".join(sorted(missing)))
+
+
+def d08_both_order_types_used(v):
+    found = {r[0] for r in v.rows("SELECT DISTINCT order_type FROM orders;")}
+    missing = enum_constants("OrderType") - found
+    require(not missing, "seed data has no " + ", ".join(sorted(missing)) + " orders")
+
+
+def d09_delisted_instrument_still_referenced(v):
     n = v.count(
         "SELECT count(*) FROM orders o JOIN instruments i USING (instrument_id) "
-        "WHERE i.is_active = FALSE;"
+        "WHERE i.active = FALSE;"
     )
     require(n > 0, "no orders point at a delisted instrument, so the case is untested")
 
 
-def d08_positions_has_a_short(v):
+def d10_positions_has_a_short(v):
     n = v.count("SELECT count(*) FROM portfolio_positions WHERE quantity < 0;")
     require(n > 0, "portfolio_positions has no negative (short) row, so the case is untested")
 
 
-def d09_holding_has_no_negatives(v):
+def d11_holding_has_no_negatives(v):
     n = v.count("SELECT count(*) FROM portfolio_holding WHERE quantity < 0;")
     equal(n, 0, "negative quantities in portfolio_holding")
 
 
 def _replay_from_db(v):
     rows = v.rows(
-        "SELECT o.client_id, o.instrument_id, o.product_type, o.type, o.quantity, "
-        "o.price_per_unit FROM orders o "
-        "JOIN transaction_success t ON t.order_id = o.order_id "
-        "ORDER BY o.order_id;"
+        "SELECT client_id, instrument_id, order_type, side, quantity, executed_price "
+        "FROM orders WHERE status = 'FILLED' ORDER BY order_id;"
     )
     holding, positions = {}, {}
-    for client_id, instrument_id, product_type, side, quantity, unit_price in rows:
-        book = holding if product_type == "DELIVERY" else positions
-        key = (int(client_id), int(instrument_id))
+    for client_id, instrument_id, order_type, side, quantity, executed in rows:
+        book = holding if order_type == HOLDING_BOOK else positions
+        key = (int(client_id), instrument_id)
         qty, avg = book.get(key, (0, Decimal(0)))
-        book[key] = apply_fill(qty, avg, side, int(quantity), price(unit_price))
+        book[key] = apply_fill(qty, avg, side, int(Decimal(quantity)), price(executed))
     return holding, positions
 
 
 def _compare_book(v, table, expected, label):
     actual = {
-        (int(r[0]), int(r[1])): (int(r[2]), price(r[3]))
+        (int(r[0]), r[1]): (int(r[2]), price(r[3]))
         for r in v.rows(
-            "SELECT client_id, instrument_id, quantity, avg_price FROM " + table + ";"
+            "SELECT client_id, instrument_id, quantity, price_per_unit FROM " + table + ";"
         )
     }
     problems = []
     for key in sorted(set(expected) | set(actual)):
         want = expected.get(key)
         got = actual.get(key)
-        where = "client " + str(key[0]) + " / instrument " + str(key[1])
+        where = "client " + str(key[0]) + " / " + str(key[1])
         if want is None:
             problems.append(where + ": in " + table + " as " + str(got)
-                            + " but no successful " + label + " order explains it")
+                            + " but no filled " + label + " order explains it")
         elif got is None:
-            problems.append(where + ": successful orders imply " + str(want)
+            problems.append(where + ": filled orders imply " + str(want)
                             + " but there is no row in " + table)
         elif got[0] != want[0] or got[1] != want[1]:
             problems.append(where + ": " + table + " says qty=" + str(got[0])
-                            + " avg=" + str(got[1]) + ", replaying the orders gives qty="
-                            + str(want[0]) + " avg=" + str(want[1]))
+                            + " price=" + str(got[1]) + ", replaying the orders gives qty="
+                            + str(want[0]) + " price=" + str(want[1]))
     require(not problems, table + " disagrees with the orders:\n      " + "\n      ".join(problems))
 
 
-def d10_holding_matches_delivery_orders(v):
+def d12_holding_matches_holding_orders(v):
     holding, _ = _replay_from_db(v)
-    _compare_book(v, "portfolio_holding", holding, "DELIVERY")
+    _compare_book(v, "portfolio_holding", holding, HOLDING_BOOK)
 
 
-def d11_positions_matches_intraday_orders(v):
+def d13_positions_matches_position_orders(v):
     _, positions = _replay_from_db(v)
-    _compare_book(v, "portfolio_positions", positions, "INTRADAY")
+    _compare_book(v, "portfolio_positions", positions, POSITION_BOOK)
 
 
-def d12_both_product_types_used(v):
-    found = {r[0] for r in v.rows("SELECT DISTINCT product_type FROM orders;")}
-    missing = {"INTRADAY", "DELIVERY"} - found
-    require(not missing, "seed data has no " + ", ".join(sorted(missing)) + " orders")
-
-
-def d13_every_order_status_exercised(v):
-    found = {r[0] for r in v.rows("SELECT DISTINCT status FROM orders;")}
-    missing = {"RECEIVED", "IN_PROGRESS", "SUCCESS", "FAILED"} - found
-    require(not missing, "seed data never reaches order status: " + ", ".join(sorted(missing)))
-
-
-def d14_in_progress_orders_are_marked(v):
-    n = v.count(
-        "SELECT count(*) FROM in_progress p JOIN orders o USING (order_id) "
-        "WHERE o.status NOT IN ('IN_PROGRESS', 'RECEIVED');"
+def d14_bank_account_and_clients_agree(v):
+    problems = v.rows(
+        "SELECT c.client_id, c.account_number, b.client_id FROM clients c "
+        "JOIN bank_account b ON b.account_number = c.account_number "
+        "WHERE b.client_id <> c.client_id;"
     )
-    equal(n, 0, "rows sitting in the in_progress queue for orders that already finished")
+    require(
+        not problems,
+        "clients and bank_account disagree about ownership: "
+        + ", ".join("client " + r[0] + " holds " + r[1] + " but that account names client "
+                    + r[2] for r in problems),
+    )
+
+
+def d15_every_client_has_credentials(v):
+    missing = v.rows(
+        "SELECT c.client_id, c.email FROM clients c "
+        "WHERE NOT EXISTS (SELECT 1 FROM auth a WHERE a.email = c.email);"
+    )
+    require(
+        not missing,
+        "clients with no auth row: "
+        + ", ".join(r[0] + " (" + r[1] + ")" for r in missing),
+    )
 
 
 CHECKS = [
     ("A", "tables exist", a01_tables_exist),
     ("A", "portfolio_positions exists", a02_portfolio_positions_exists),
     ("A", "portfolio_positions mirrors portfolio_holding", a03_positions_mirrors_holding),
-    ("A", "bank_account.version present", a04_version_column),
-    ("A", "orders.product_type present, NOT NULL, no default", a05_product_type_column),
-    ("A", "money columns are exact numerics", a06_money_is_exact),
-    ("A", "no float/money columns anywhere", a07_no_inexact_numeric_anywhere),
-    ("A", "every migration on disk is recorded as applied", a08_every_migration_recorded),
-    ("A", "migrations are NNN_ numbered and unique", a09_numbered_in_order),
+    ("A", "every entity class has a table", a04_every_entity_has_a_table),
+    ("A", "every table matches its entity's fields", a05_tables_match_their_entities),
+    ("A", "orders.order_type present, NOT NULL, no default", a06_order_type_column),
+    ("A", "instruments are keyed by symbol", a07_instruments_are_keyed_by_symbol),
+    ("A", "money columns are exact numerics", a08_money_is_exact),
+    ("A", "no float/money columns anywhere", a09_no_inexact_numeric_anywhere),
+    ("A", "every migration on disk is recorded as applied", a10_every_migration_recorded),
+    ("A", "migrations are NNN_ numbered and unique", a11_numbered_in_order),
 
     ("B", "at least three CHECK constraints", b01_at_least_three_checks),
-    ("B", "a CHECK covers account state", b02_account_state_check),
+    ("B", "CHECK vocabularies match the Java enums", b02_check_vocabularies_match_the_enums),
     ("B", "UNIQUE on orders.idempotency_key", b03_idempotency_unique),
     ("B", "all expected foreign keys exist", b04_foreign_keys_present),
     ("B", "portfolio_holding forbids negative quantity", b05_holding_forbids_negative),
     ("B", "portfolio_positions allows negative quantity", b06_positions_allows_negative),
     ("B", "one portfolio row per (client, instrument)", b07_unique_portfolio_keys),
-    ("B", "terminal tables are unique per order", b08_terminal_tables_unique_per_order),
+    ("B", "order_history refuses a no-op transition", b08_order_history_records_a_real_transition),
+    ("B", "bank_account and clients reference each other",
+     b09_bank_account_and_clients_reference_each_other),
 
     ("C", "duplicate idempotency_key raises 23505", c01_duplicate_idempotency_key_rejected),
-    ("C", "unknown product_type rejected", c02_bad_product_type_rejected),
+    ("C", "unknown order_type rejected", c02_bad_order_type_rejected),
     ("C", "unknown order side rejected", c03_bad_side_rejected),
     ("C", "zero-quantity order rejected", c04_zero_quantity_rejected),
     ("C", "order for a missing client rejected", c05_missing_client_rejected),
-    ("C", "unknown client status rejected", c06_bad_client_status_rejected),
-    ("C", "ACTIVE <-> SUSPENDED is reversible", c07_suspension_is_reversible),
-    ("C", "CLOSED cannot be reopened", c08_closed_is_terminal),
-    ("C", "a client row cannot be deleted", c09_client_never_deleted),
-    ("C", "an instrument row cannot be deleted", c10_instrument_never_deleted),
-    ("C", "delisting keeps old orders resolvable", c11_delisting_keeps_orders_resolvable),
-    ("C", "delisting without a date is rejected", c12_delisted_must_have_date),
-    ("C", "an order cannot reach two terminal states", c13_single_terminal_state),
-    ("C", "settling an order updates orders.status", c14_terminal_insert_updates_order_status),
-    ("C", "portfolio_holding rejects a negative quantity", c15_holding_rejects_negative_quantity),
-    ("C", "portfolio_positions accepts a short", c16_positions_accepts_negative_quantity),
-    ("C", "duplicate (client, instrument) holding rejected", c17_one_portfolio_row_per_client_instrument),
-    ("C", "stale balance writer detects it lost", c18_optimistic_concurrency_detects_the_loser),
-    ("C", "negative bank balance rejected", c19_negative_balance_rejected),
-    ("C", "sequences are past the seeded ids", c20_sequences_resynced_past_seed),
-    ("C", "blank auth password rejected", c21_blank_password_rejected),
-    ("C", "queue row cannot contradict its order's instrument", c22_in_progress_cannot_contradict_its_order),
-    ("C", "queue row with the matching instrument is accepted", c23_in_progress_accepts_the_matching_instrument),
+    ("C", "order for an unlisted symbol rejected", c06_missing_instrument_rejected),
+    ("C", "unknown client account_state rejected", c07_bad_client_state_rejected),
+    ("C", "ACTIVE <-> SUSPENDED is reversible", c08_suspension_is_reversible),
+    ("C", "CLOSED cannot be reopened", c09_closed_is_terminal),
+    ("C", "a client row cannot be deleted", c10_client_never_deleted),
+    ("C", "an instrument row cannot be deleted", c11_instrument_never_deleted),
+    ("C", "delisting keeps old orders resolvable", c12_delisting_keeps_orders_resolvable),
+    ("C", "deactivate() without a date is accepted", c13_deactivating_without_a_date_is_accepted),
+    ("C", "an unknown order status is rejected", c14_bad_order_status_rejected),
+    ("C", "FILLED without an executed price rejected", c15_filled_without_executed_price_rejected),
+    ("C", "executed price only on a FILLED order", c16_executed_price_only_when_filled),
+    ("C", "portfolio_holding rejects a negative quantity", c17_holding_rejects_negative_quantity),
+    ("C", "portfolio_positions accepts a short", c18_positions_accepts_negative_quantity),
+    ("C", "duplicate (client, instrument) holding rejected",
+     c19_one_portfolio_row_per_client_instrument),
+    ("C", "stale credential writer detects it lost", c20_optimistic_concurrency_detects_the_loser),
+    ("C", "negative bank balance rejected", c21_negative_bank_balance_rejected),
+    ("C", "negative wallet balance rejected", c22_negative_wallet_balance_rejected),
+    ("C", "sequences are past the seeded ids", c23_sequences_resynced_past_seed),
+    ("C", "blank auth password rejected", c24_blank_password_rejected),
+    ("C", "audit row for a missing order rejected", c25_history_for_a_missing_order_rejected),
+    ("C", "audit row for a real transition accepted", c26_history_accepts_a_real_transition),
+    ("C", "audit row with an unknown status rejected", c27_history_rejects_an_unknown_status),
 
-    ("D", "SUCCESS orders have a success row", d01_success_orders_have_one_success_row),
-    ("D", "FAILED orders have a failure row", d02_failed_orders_have_one_failure_row),
-    ("D", "no order in both terminal tables", d03_no_order_in_both_terminal_tables),
-    ("D", "orders.status agrees with terminal tables", d04_status_agrees_with_terminal_tables),
-    ("D", "unfinished orders have no terminal row", d05_non_terminal_orders_have_no_terminal_row),
+    ("D", "FILLED orders carry an executed price", d01_filled_orders_have_an_executed_price),
+    ("D", "unfilled orders carry no executed price", d02_unfinished_orders_have_no_executed_price),
+    ("D", "every order has a CREATED event", d03_every_order_has_a_created_event),
+    ("D", "the last event agrees with orders.status", d04_last_event_agrees_with_order_status),
+    ("D", "no audit row records a self-transition", d05_history_records_no_self_transitions),
     ("D", "all three client states are seeded", d06_all_three_client_states_present),
-    ("D", "a delisted instrument still has orders", d07_delisted_instrument_still_referenced),
-    ("D", "portfolio_positions contains a short", d08_positions_has_a_short),
-    ("D", "portfolio_holding has no negatives", d09_holding_has_no_negatives),
-    ("D", "portfolio_holding matches the DELIVERY orders", d10_holding_matches_delivery_orders),
-    ("D", "portfolio_positions matches the INTRADAY orders", d11_positions_matches_intraday_orders),
-    ("D", "both product types are exercised", d12_both_product_types_used),
-    ("D", "all four order statuses are exercised", d13_every_order_status_exercised),
-    ("D", "the in_progress queue holds only unfinished orders", d14_in_progress_orders_are_marked),
+    ("D", "all four order statuses are exercised", d07_every_order_status_exercised),
+    ("D", "both order types are exercised", d08_both_order_types_used),
+    ("D", "a delisted instrument still has orders", d09_delisted_instrument_still_referenced),
+    ("D", "portfolio_positions contains a short", d10_positions_has_a_short),
+    ("D", "portfolio_holding has no negatives", d11_holding_has_no_negatives),
+    ("D", "portfolio_holding matches the HOLDING orders", d12_holding_matches_holding_orders),
+    ("D", "portfolio_positions matches the POSITION orders", d13_positions_matches_position_orders),
+    ("D", "bank_account and clients agree on ownership", d14_bank_account_and_clients_agree),
+    ("D", "every client has credentials", d15_every_client_has_credentials),
 ]
 
 SECTION_TITLES = {
@@ -821,7 +1013,8 @@ SECTION_TITLES = {
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="verify_db.py",
-        description="Verify the trade database against the SEC3-94 / SEC3-95 acceptance criteria.",
+        description="Verify the trade database against the domain entities and the "
+                    "SEC3-94 / SEC3-95 acceptance criteria.",
     )
     add_connection_args(parser)
     parser.add_argument("-v", "--verbose", action="store_true", help="list passing checks too")
@@ -836,21 +1029,13 @@ def main(argv=None):
 
     print("Verifying " + cfg.describe())
 
-    reachable, detail = cfg.server_reachable()
-    if not reachable:
-        print("error: cannot reach the server.\n" + detail)
-        return 1
-    if not cfg.database_exists():
-        print("error: database " + cfg.dbname + " does not exist. Run: python scripts/apply_db.py")
-        return 1
-
-    verifier = Verifier(cfg)
     selected = [c for c in CHECKS if not args.only or c[0] == args.only.upper()]
     if not selected:
         print("error: no checks in section " + repr(args.only))
         return 2
 
-    passed, failures = 0, []
+    verifier = Verifier(cfg)
+    failures = []
     current_section = None
 
     for section, name, fn in selected:
@@ -863,28 +1048,24 @@ def main(argv=None):
         except CheckFailed as exc:
             failures.append((section, name, str(exc)))
             print("  FAIL  " + name)
-            for line in str(exc).splitlines():
-                print("        " + line)
+            print("      " + str(exc))
         except DbError as exc:
             failures.append((section, name, str(exc)))
             print("  ERROR " + name)
-            for line in str(exc).splitlines()[:6]:
-                print("        " + line)
+            print("      " + str(exc))
         else:
-            passed += 1
             if args.verbose:
                 print("  ok    " + name)
 
     print("")
     print("=" * 70)
     if failures:
-        print("FAILED: " + str(passed) + " passed, " + str(len(failures)) + " failed")
-        print("")
+        print("FAILED: " + str(len(failures)) + " of " + str(len(selected)) + " checks")
         for section, name, _ in failures:
             print("  " + section + " - " + name)
         return 1
 
-    print("PASSED: all " + str(passed) + " checks")
+    print("PASSED: all " + str(len(selected)) + " checks")
     return 0
 
 

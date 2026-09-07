@@ -1,87 +1,7 @@
-"""Transform: data in, data out.
-
-Opens no socket, reads no environment variable, writes nowhere. Everything it
-needs arrives as an argument and everything it produces is returned. That is
-what makes it the only part of the pipeline testable without a network.
-
-REPAIR OR QUARANTINE
---------------------
-The six defects are not equally defensible, so they are not treated alike. A
-defect is repaired only where the true value can be RECOVERED from evidence.
-Where a repair would mean INVENTING a number, the row is quarantined instead.
-
-Every repaired row carries `repaired: True` and a `repairs` list naming what
-was changed and why. Nothing is fixed silently: a chart can exclude repaired
-rows, and the review can see each decision was deliberate.
-
-Every rejected row is QUARANTINED, never dropped: it is returned in
-`quarantined` with the reason and the original candle attached. A dropped row
-is invisible, and a chart drawn over silently-dropped rows is wrong in a way
-nobody can see. Counts always reconcile: kept + quarantined = candles in.
-
-Nothing here raises on a bad row. Raising would abandon the good rows in the
-same payload, and one corrupt candle in July should not cost you the other
-eight.
-
-THE SIX DEFECTS AND THE DECISION ON EACH
-----------------------------------------
-1. duplicate date, two different closes  -> QUARANTINE (DUPLICATE_DATE)
-   Nothing in the payload says which close is right. First is arbitrary, last
-   is arbitrary, averaging invents a price that never traded. Needs the vendor.
-
-2. missing `close`                       -> QUARANTINE (MISSING_FIELD)
-   Interpolating from neighbours would chart a price nobody traded at. Note
-   the API already declares interpolation with `synthetic: true`, which says
-   the vendor considers that their call to make, not ours.
-
-3. "n/a" where a number belongs          -> QUARANTINE (NOT_A_NUMBER)
-   Same reasoning as 2. The value is absent, not malformed; there is nothing
-   to recover.
-
-4. high below low                        -> REPAIR, flagged (repair_high_low)
-   Mechanically the two values look transposed: swapping them puts both open
-   and close inside the range and lines the row up with its neighbours. But
-   plausible is not provable -- the alternative story is that ONE value was
-   corrupted and the other is fine, in which case swapping produces a
-   confident wrong number. So the swap is applied ONLY when it fully resolves
-   the candle, and the row is flagged so downstream can exclude it. If the
-   swap does not resolve it, the row is quarantined.
-
-   Note: this is not a red candle. Red vs green is open vs close. `high` and
-   `low` are the day's max and min regardless of direction, so high < low is a
-   contradiction either way. (On this row close 173.60 > open 172.50, so it is
-   green if anything.)
-
-5. negative volume (-1)                  -> REPAIR to None (repair_volume)
-   `-1` is a sentinel for "unknown", not a real count. The evidence is inside
-   the same feed: the INFY fixture expresses unknown volume as `null`, and
-   null-volume rows are already kept. So -1 -> None is consistent with how the
-   API behaves elsewhere, and the prices on the row are all valid.
-
-6. `09/07/2026`, not ISO                 -> REPAIR to 2026-07-09 (repair_date)
-   Ambiguous in isolation (9 July DD/MM, or 7 September MM/DD). Resolved by
-   context: it is a BSE symbol, and the preceding candle is 2026-07-08, so
-   9 July continues the sequence while 7 September leaves a two-month hole.
-   The assumption is hard-coded as DAYFIRST below and asserted in a test, so
-   it cannot drift silently.
-
-TWO THINGS THAT LOOK LIKE DEFECTS AND ARE NOT
----------------------------------------------
-  - `volume: null`     -> kept, volume stays None. A missing volume does not
-                          make the prices wrong.
-  - `synthetic: true`  -> kept, flag carried through so a chart can mark or
-                          exclude it. Discarding it would hide that the number
-                          was interpolated by the vendor.
-
-Pass `repair=False` to turn every repair back into a quarantine. The strict
-mode is what you run if the review prefers it, and the tests cover both.
-"""
-
 from __future__ import annotations
 
 from datetime import date, datetime
 
-# Quarantine reason codes. Stable strings, so a test can assert on them.
 DUPLICATE_DATE = "DUPLICATE_DATE"
 MISSING_FIELD = "MISSING_FIELD"
 NOT_A_NUMBER = "NOT_A_NUMBER"
@@ -90,25 +10,19 @@ NEGATIVE_VOLUME = "NEGATIVE_VOLUME"
 BAD_DATE_FORMAT = "BAD_DATE_FORMAT"
 NON_POSITIVE_PRICE = "NON_POSITIVE_PRICE"
 
-# Repair codes, recorded on the row in `repairs`.
 REPAIR_HIGH_LOW = "repair_high_low"
 REPAIR_VOLUME = "repair_volume"
 REPAIR_DATE = "repair_date"
 
 REQUIRED_PRICE_FIELDS = ("open", "high", "low", "close")
 
-# Defect 6: the non-ISO date convention this feed is assumed to use.
-# BSE symbol, and the row follows 2026-07-08, so DD/MM/YYYY. Asserted in a
-# test so the assumption cannot drift silently.
 DAYFIRST = True
 NON_ISO_DATE_FORMAT = "%d/%m/%Y" if DAYFIRST else "%m/%d/%Y"
 
-# Volume values the feed uses to mean "unknown" rather than a real count.
 VOLUME_SENTINELS = (-1,)
 
 
 def _parse_iso_date(value) -> date | None:
-    """Return a date for a strict ISO `YYYY-MM-DD` string, else None."""
     if not isinstance(value, str):
         return None
     try:
@@ -118,7 +32,6 @@ def _parse_iso_date(value) -> date | None:
 
 
 def _parse_non_iso_date(value) -> date | None:
-    """Defect 6. Parse `09/07/2026` under the DAYFIRST assumption above."""
     if not isinstance(value, str):
         return None
     try:
@@ -128,11 +41,6 @@ def _parse_non_iso_date(value) -> date | None:
 
 
 def _as_number(value) -> float | None:
-    """Return a float for a genuine number, else None.
-
-    Booleans are rejected: `True` is numerically 1 in Python, and a price of
-    True is a defect, not a price.
-    """
     if isinstance(value, bool) or value is None:
         return None
     if isinstance(value, (int, float)):
@@ -147,21 +55,6 @@ def _quarantine(rows_out, symbol, candle, reason, detail):
 
 
 def transform(payload: dict, repair: bool = True) -> dict:
-    """Clean one raw candles envelope.
-
-    Args:
-        payload: a raw `CandlesResponse` envelope, as extract returns it.
-        repair:  when True (default), defects 4, 5 and 6 are repaired and
-                 flagged. When False, every defect is quarantined instead.
-
-    Returns:
-        {
-          "symbol", "currency", "interval",
-          "rows":        [clean candle dicts, sorted by date],
-          "quarantined": [{"symbol", "reason", "detail", "candle"}],
-          "summary":     {counts, repair counts, derived aggregates},
-        }
-    """
     data = payload.get("data") or {}
     meta = payload.get("meta") or {}
     symbol = data.get("symbol") or meta.get("symbol") or "UNKNOWN"
@@ -181,12 +74,10 @@ def transform(payload: dict, repair: bool = True) -> dict:
 
         repairs: list[dict] = []
 
-        # --- date -------------------------------------------------------
         raw_date = candle.get("date")
         parsed_date = _parse_iso_date(raw_date)
 
         if parsed_date is None:
-            # Defect 6: not ISO. Repairable under a stated convention.
             recovered = _parse_non_iso_date(raw_date) if repair else None
             if recovered is None:
                 _quarantine(quarantined, symbol, candle, BAD_DATE_FORMAT,
@@ -199,24 +90,18 @@ def transform(payload: dict, repair: bool = True) -> dict:
                           f"({'DD/MM' if DAYFIRST else 'MM/DD'} assumed)",
             })
 
-        # Defect 1: same date twice. Not repairable -- there is no evidence
-        # for which close is correct, so the first is kept and the later one
-        # is quarantined rather than silently overwriting.
         if parsed_date in seen_dates:
             _quarantine(quarantined, symbol, candle, DUPLICATE_DATE,
                         f"{parsed_date.isoformat()} already seen; "
                         f"first occurrence kept")
             continue
 
-        # --- required prices present ------------------------------------
-        # Defect 2: a required price field absent entirely. Not repairable.
         missing = [f for f in REQUIRED_PRICE_FIELDS if f not in candle]
         if missing:
             _quarantine(quarantined, symbol, candle, MISSING_FIELD,
                         f"missing required field(s): {', '.join(missing)}")
             continue
 
-        # Defect 3: present but not a number. Not repairable.
         prices: dict[str, float] = {}
         bad_types = []
         for field in REQUIRED_PRICE_FIELDS:
@@ -236,7 +121,6 @@ def transform(payload: dict, repair: bool = True) -> dict:
                         f"non-positive price(s): {', '.join(sorted(non_positive))}")
             continue
 
-        # --- defect 4: high below low -----------------------------------
         if prices["high"] < prices["low"]:
             original_high, original_low = prices["high"], prices["low"]
             swapped_ok = (
@@ -246,9 +130,6 @@ def transform(payload: dict, repair: bool = True) -> dict:
                 and original_high <= prices["close"] <= original_low
             )
             if not swapped_ok:
-                # Either repair is off, or the swap does not fully resolve the
-                # candle -- which means the transposition story does not hold
-                # and a swap would be inventing a number.
                 _quarantine(quarantined, symbol, candle, HIGH_BELOW_LOW,
                             f"high {original_high} < low {original_low}"
                             + ("" if repair else " (repair disabled)"))
@@ -261,7 +142,6 @@ def transform(payload: dict, repair: bool = True) -> dict:
                           f"(open and close both fall inside the swapped range)",
             })
 
-        # open and close must sit inside the day's range.
         outside = [
             f for f in ("open", "close")
             if not (prices["low"] <= prices[f] <= prices["high"])
@@ -273,7 +153,6 @@ def transform(payload: dict, repair: bool = True) -> dict:
                         f"[{prices['low']}, {prices['high']}]")
             continue
 
-        # --- defect 5: volume -------------------------------------------
         raw_volume = candle.get("volume")
         volume: int | None = None
         if raw_volume is not None:
@@ -283,8 +162,6 @@ def transform(payload: dict, repair: bool = True) -> dict:
                             f"non-numeric volume {raw_volume!r}")
                 continue
             if numeric_volume in VOLUME_SENTINELS and repair:
-                # Sentinel for "unknown", not a real count. The same feed
-                # expresses unknown volume as null elsewhere, so normalise.
                 volume = None
                 repairs.append({
                     "code": REPAIR_VOLUME,
@@ -304,6 +181,7 @@ def transform(payload: dict, repair: bool = True) -> dict:
         rows.append({
             "symbol": symbol,
             "date": parsed_date,
+            "interval": interval,
             "open": prices["open"],
             "high": prices["high"],
             "low": prices["low"],
@@ -330,7 +208,6 @@ def transform(payload: dict, repair: bool = True) -> dict:
 
 
 def _derive(rows: list[dict]) -> None:
-    """Add per-row derived measures, in place. Requires rows sorted by date."""
     previous_close = None
     for row in rows:
         row["range"] = round(row["high"] - row["low"], 4)
@@ -348,12 +225,6 @@ def _derive(rows: list[dict]) -> None:
 
 
 def _summarise(symbol, candles, rows, quarantined, repair) -> dict:
-    """Aggregate the cleaned rows. Counts reconcile: kept + quarantined = in.
-
-    Aggregating and deriving are the transform's job, so every analytical
-    measure is computed here and merely persisted by the load. Nothing in this
-    function reads a socket, an environment variable or a file.
-    """
     reasons: dict[str, int] = {}
     for bad in quarantined:
         reasons[bad["reason"]] = reasons.get(bad["reason"], 0) + 1
@@ -384,7 +255,6 @@ def _summarise(symbol, candles, rows, quarantined, repair) -> dict:
 
 
 def _price_measures(rows: list[dict]) -> dict:
-    """The analytical measures, over cleaned rows sorted by date."""
     closes = [r["close"] for r in rows]
     volumes = [r["volume"] for r in rows if r["volume"] is not None]
     turnovers = [r["turnover"] for r in rows if r["turnover"] is not None]
@@ -428,9 +298,6 @@ def _price_measures(rows: list[dict]) -> dict:
             "worst_day": next(r["date"] for r in rows
                               if r["daily_return_pct"] == worst),
             "avg_daily_return_pct": round(sum(returns) / len(returns), 4),
-            # Sample standard deviation of daily returns: the usual measure of
-            # how much a name moves about, quoted per day rather than
-            # annualised because the fixtures cover two weeks, not a year.
             "volatility_pct": _stdev(returns),
             "up_days": sum(1 for r in returns if r > 0),
             "down_days": sum(1 for r in returns if r < 0),
@@ -440,7 +307,6 @@ def _price_measures(rows: list[dict]) -> dict:
 
 
 def _stdev(values: list[float]) -> float | None:
-    """Sample standard deviation. None below two points, where it is undefined."""
     if len(values) < 2:
         return None
     mean = sum(values) / len(values)
@@ -449,12 +315,6 @@ def _stdev(values: list[float]) -> float | None:
 
 
 def _max_drawdown_pct(closes: list[float]) -> float | None:
-    """Largest peak-to-trough fall, as a negative percentage.
-
-    Measured on closes in date order: the worst a holder could have done by
-    buying at a peak and selling at the following trough. 0.0 means the series
-    never fell below a previous peak.
-    """
     if len(closes) < 2:
         return None
     peak = closes[0]
@@ -466,8 +326,6 @@ def _max_drawdown_pct(closes: list[float]) -> float | None:
     return round(worst, 4)
 
 
-# Metrics persisted to the store, in the order a report should read them.
-# (key in summary, human label, unit)
 METRIC_SPEC = [
     ("trading_days", "Trading days", "days"),
     ("close_first", "First close", "price"),
@@ -501,12 +359,6 @@ METRIC_SPEC = [
 
 
 def metrics(result: dict) -> list[dict]:
-    """Flatten a transform result's summary into named metrics.
-
-    Long format -- one row per metric rather than one column per metric -- so
-    a new measure needs no schema change, and so metrics can be compared
-    across runs with a single GROUP BY.
-    """
     summary = result["summary"]
     out = []
     for key, label, unit in METRIC_SPEC:
@@ -523,6 +375,17 @@ def metrics(result: dict) -> list[dict]:
     return out
 
 
+def summarise_rows(symbol: str, rows: list[dict],
+                   quarantined: list[dict] | None = None,
+                   repair: bool = True,
+                   candles_in: int | None = None) -> dict:
+    quarantined = list(quarantined or [])
+    rows.sort(key=lambda r: r["date"])
+    _derive(rows)
+    if candles_in is None:
+        candles_in = len(rows) + len(quarantined)
+    return _summarise(symbol, range(candles_in), rows, quarantined, repair)
+
+
 def transform_many(payloads: list[dict], repair: bool = True) -> list[dict]:
-    """Transform several payloads. One per symbol, in the order given."""
     return [transform(p, repair=repair) for p in payloads]

@@ -41,7 +41,12 @@ seeds=("$SEED_DIR"/*.csv)
 if [ ${#seeds[@]} -eq 0 ]; then
     log "no .csv files in $SEED_DIR; skipping seed load"
 else
-    log "loading ${#seeds[@]} seed file(s) from $SEED_DIR"
+    log "loading ${#seeds[@]} seed file(s) from $SEED_DIR in one transaction"
+    script=$(mktemp)
+    trap 'rm -f "$script"' EXIT
+
+    printf 'BEGIN;\n' > "$script"
+
     for file in "${seeds[@]}"; do
         base=$(basename "$file" .csv)
         table=${base#*_}
@@ -57,11 +62,15 @@ else
         fi
 
         log "  load $(basename "$file") -> ${table}"
-        psql_run --command "\copy \"${table}\" (${header}) FROM '${file}' WITH (FORMAT csv, HEADER true)"
+        printf '\copy "%s" (%s) FROM '\''%s'\'' WITH (FORMAT csv, HEADER true)\n' \
+            "$table" "$header" "$file" >> "$script"
     done
-fi
 
-log "resyncing sequences past the seeded ids"
-psql_run --command "SELECT count(*) AS sequences_resynced FROM fn_resync_sequences();"
+    log "resyncing sequences past the seeded ids"
+    printf 'SELECT count(*) AS sequences_resynced FROM fn_resync_sequences();\n' >> "$script"
+    printf 'COMMIT;\n' >> "$script"
+
+    psql_run --file "$script"
+fi
 
 log "database is built and ready"

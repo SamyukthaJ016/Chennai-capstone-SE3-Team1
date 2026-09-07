@@ -1,6 +1,5 @@
 package com.team1.trading.domain.exception;
 
-/** Rule 1, ACC-404: no account exists with the key on the request. */
 public class AccountNotFoundException extends DomainException {
 
     public static final String CODE = "ACC-404";
@@ -13,7 +12,6 @@ public class AccountNotFoundException extends DomainException {
         this.accountId = accountId;
     }
 
-    /** For the server log, not for the response body. */
     public Long getAccountId() {
         return accountId;
     }

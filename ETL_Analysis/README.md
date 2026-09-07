@@ -7,48 +7,68 @@ Three steps, three modules, wired by a fourth that does nothing else.
 ```
 ETL_Analysis/
 ├── __init__.py             makes this a package (needed for `python -m`)
-├── Extract.py              the original scratch client, kept as-is
 ├── extract_fixtures.py     EXTRACT (offline) - reads fixtures/, no network
 ├── extract_live.py         EXTRACT (live)    - real API, key from env, cached
 ├── transform.py            TRANSFORM         - pure: data in, data out
 ├── load.py                 LOAD              - writes to DuckDB
 ├── load_print.py           LOAD (console)    - the earlier print-only loader
+├── pipeline.py             the fourth module - wiring only
+│
+├── store.py                READ side of the store - read-only, + the SQL guard
+├── charts.py               the dashboard's figures, as pure dicts
+├── dashboard.py            the live dashboard (streamlit)
+├── claims.py               the claim GENERATORS - questions fixed, answers computed
+├── claims.md               THE DELIVERABLE - generated from the store, never edited
+│
+├── report.py               LEGACY: the one-shot HTML report, still supported
+├── report_svg.py           earlier dependency-free renderer, not wired up
+│
 ├── symbols.py              symbol universe, validation and quota planning
 ├── symbols_nse_bse.txt     150 NSE/BSE candidate symbols, editable
-├── report.py               the HTML dashboard, charted with Plotly
-├── report_svg.py           earlier dependency-free renderer, not wired up
 ├── analytics_schema.sql    DDL for the analytical store
-├── pipeline.py             the fourth module - wiring only
+├── requirements.txt        the dependency set
 ├── fixtures/               three canned API responses, one corrupted
-└── tests/                  pytest over the transform
+└── tests/                  438 tests: transform, load, store, charts,
+                            claims, dashboard, report and the wiring
 ```
+
+The pipeline writes the store; the dashboard reads it. Those are the only two
+directions, and `store.py` is the only module on the read side -- it opens
+DuckDB **read-only**, so nothing a reader does can change what was loaded.
 
 ## Running it
 
-From the **repository root**, not from inside this folder:
+From the **repository root** (`Team1/`), not from inside this folder:
 
 ```bash
-pip install -r requirements.txt      # plotly, duckdb, requests
+pip install -r ETL_Analysis/requirements.txt
 
-python -m ETL_Analysis.pipeline                       # all three -> warehouse.duckdb
+python -m ETL_Analysis.pipeline               # load -> warehouse.duckdb
+python -m ETL_Analysis.dashboard              # open the dashboard on it
+python -m ETL_Analysis.pipeline --dashboard   # do both, in one command
+```
+
+That is the whole loop. **The dashboard reads the store, so it is up to date
+the moment a run finishes** -- there is no artefact to regenerate and no step
+to remember. Starting the dashboard is covered on its own below.
+
+```bash
 python -m ETL_Analysis.pipeline --db my.duckdb        # a different store
 python -m ETL_Analysis.pipeline --print               # console instead of DuckDB
 python -m ETL_Analysis.pipeline --symbols RELIANCE.NS # one symbol
 python -m ETL_Analysis.pipeline --strict              # quarantine everything
 python -m ETL_Analysis.pipeline -v                    # verbose logging
-python -m ETL_Analysis.pipeline --report out/run.html # where to write the report
-python -m ETL_Analysis.pipeline --no-report           # skip the report
 python -m ETL_Analysis.pipeline --live                # once a real key exists
 
-# pulling everything the API serves (needs --live)
-python -m ETL_Analysis.pipeline --live --list-symbols            # look first
-python -m ETL_Analysis.pipeline --live --all-symbols             # pull them all
-python -m ETL_Analysis.pipeline --live --all-symbols --exchanges NSE BSE
-python -m ETL_Analysis.pipeline --live --all-symbols --limit 25
+# the legacy self-contained HTML report (see "The legacy report" below)
+python -m ETL_Analysis.pipeline --legacy-report               # -> report.html
+python -m ETL_Analysis.pipeline --legacy-report out/run.html  # somewhere else
 
-# the bundled NSE/BSE universe
-python -m ETL_Analysis.pipeline --live                    # all 150, no --symbols needed
-python -m ETL_Analysis.pipeline --live --validate-symbols # check which ones resolve
+# the bundled NSE/BSE universe (needs --live)
+python -m ETL_Analysis.pipeline --list-symbols            # look first, free
+python -m ETL_Analysis.pipeline --live                    # all 150
+python -m ETL_Analysis.pipeline --live --exchanges NSE BSE
+python -m ETL_Analysis.pipeline --live --limit 25
 python -m ETL_Analysis.pipeline --live --symbol-file mine.txt
 ```
 
@@ -56,10 +76,9 @@ A **live** run with no `--symbols` pulls the bundled NSE/BSE universe. An
 **offline** run with no `--symbols` still uses the three fixture symbols,
 because fixtures are all it has.
 
-Every run writes `report.html` (or wherever `--report` points).
-
-`duckdb` is the only dependency for the default path, and `--print` needs none
-at all. `extract_live.py` needs `requests`.
+`duckdb` is the only dependency for the default load path, and `--print` needs
+none at all. The dashboard needs `streamlit`, `plotly` and `pandas`;
+`extract_live.py` needs `requests`.
 
 Tests, also from the repository root:
 
@@ -67,6 +86,98 @@ Tests, also from the repository root:
 pip install pytest
 pytest ETL_Analysis/tests -v
 ```
+
+## Starting the dashboard
+
+The dashboard is a [streamlit](https://streamlit.io) app. It reads the DuckDB
+store, so **load the store once before starting it** — a dashboard over an
+empty store has nothing to draw.
+
+```bash
+cd Team1                                    # the repository root
+pip install -r ETL_Analysis/requirements.txt
+
+python -m ETL_Analysis.pipeline             # 1. load  -> warehouse.duckdb
+python -m ETL_Analysis.dashboard            # 2. serve -> http://localhost:8501
+```
+
+Streamlit prints the URL and opens your browser at it. Leave it running: the
+page reads the store live, so you can run the pipeline again in another
+terminal and press **Reload from disk** in the left rail rather than
+restarting.
+
+To do both in one command:
+
+```bash
+python -m ETL_Analysis.pipeline --dashboard   # load, then serve
+```
+
+**Stop it** with `Ctrl+C` in the terminal it is running in.
+
+### Options
+
+```bash
+python -m ETL_Analysis.dashboard --db my.duckdb   # a store somewhere else
+python -m ETL_Analysis.dashboard --port 8600      # a different port
+python -m ETL_Analysis.dashboard --headless       # do not open a browser
+```
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--db PATH` | `warehouse.duckdb` | Which store to read. Relative to the directory you started from. |
+| `--port N` | 8501 | Port to serve on. Streamlit's own default when not given. |
+| `--headless` | off | Serve without opening a browser — what you want over SSH, or in a container. |
+
+The store can also be switched from inside the app: the **Store** box at the
+top of the rail takes a path, and **Reload from disk** re-reads it.
+
+### Running `streamlit run` directly
+
+This works too, and is worth knowing if you want to pass streamlit's own
+flags:
+
+```bash
+python -m streamlit run ETL_Analysis/dashboard.py -- --db warehouse.duckdb
+```
+
+Note the bare `--`: everything after it goes to the app rather than to
+streamlit. `dashboard.py` puts the project root on `sys.path` when it is run
+as a script, so this resolves whether it is imported as a module or executed
+as a file.
+
+**Prefer `python -m ETL_Analysis.dashboard` anyway.** It is the same app, but
+it also passes the theme on the command line — surface colours, ink, and the
+accent — so the dashboard looks the same whatever directory you start it from
+and whatever your own streamlit settings say. Started through bare
+`streamlit run`, you get streamlit's stock red accent instead of the palette
+in `charts.py`.
+
+### When it does not start
+
+| What you see | What it means |
+|---|---|
+| `No store at warehouse.duckdb. Run the pipeline first` | The app started but has nothing to read. Run `python -m ETL_Analysis.pipeline`, then reload the page. |
+| `Port 8501 is already in use` | A dashboard is already running. Open the URL it printed, or start this one with `--port 8600`. |
+| `Charts need plotly, which is not installed` | The page renders and the tables are all there, only the charts are missing. `pip install plotly`. |
+| `A pipeline run is holding the store open` | DuckDB allows many readers or one writer, and a load is in progress. It retries by itself; reload once the run finishes. |
+| `Already inside a dashboard process; refusing to start another` | You ran the launcher from inside the app's own process. Open the URL streamlit already printed. |
+
+### A note on who can reach it
+
+Streamlit binds to all interfaces by default, so it prints a **Network URL**
+and an **External URL** alongside the local one. Those reach the app from your
+LAN and, if anything forwards the port, from outside it — and there is no
+authentication in front of the SQL console. On a shared or untrusted network,
+bind it to your own machine only:
+
+```bash
+python -m streamlit run ETL_Analysis/dashboard.py \
+    --server.address 127.0.0.1 -- --db warehouse.duckdb
+```
+
+The data here is invented and the store is local, so this is a habit rather
+than an emergency — but the console does run arbitrary SQL against whatever
+store it is pointed at.
 
 ## Why extract is split in two
 
@@ -219,6 +330,51 @@ Volatility and drawdown are verified in the test suite against
 `statistics.stdev` and a brute-force peak-to-trough search respectively, so a
 wrong formula fails rather than being confirmed by its own output.
 
+### Idempotency
+
+The contract requires re-running a load not to double-count. `daily_price` is
+merged on its natural key `(symbol, trade_date)`: the loader deletes exactly the
+dates it is about to write, then inserts. Deleting by date rather than by symbol
+means a narrow re-pull does not destroy history from a wider one.
+`quarantined_candle` is replaced per symbol. `load_run` is append-only, because
+the ledger is the history of loads rather than the current state.
+
+### Reconciliation
+
+`candles_in = rows_kept + rows_quarantined` is an invariant, checked in SQL
+after every run and reported by the pipeline. A non-empty result means a row was
+lost between arriving and landing — the failure this whole design exists to make
+visible.
+
+### Poking at the store
+
+The dashboard's SQL console runs all of these, with the schema beside it. If
+you would rather have a terminal:
+
+```bash
+duckdb warehouse.duckdb
+```
+
+```sql
+-- what landed
+SELECT symbol, count(*), min(trade_date), max(trade_date)
+  FROM daily_price GROUP BY symbol;
+
+-- what did not, and why
+SELECT symbol, reason, raw_date, detail FROM quarantined_candle;
+
+-- observed data only, excluding vendor-interpolated and repaired rows
+SELECT * FROM daily_price WHERE NOT synthetic AND NOT repaired;
+
+-- the load history
+SELECT run_id, symbol, candles_in, rows_kept, rows_repaired, rows_quarantined
+  FROM load_run ORDER BY loaded_at DESC;
+```
+
+That last filter matters for `claims.md`: a claim resting on repaired or
+synthetic rows is a claim resting on numbers nobody observed, and the flags are
+there so a chart can exclude them.
+
 ## Which symbols get pulled
 
 Two cases, and no third:
@@ -272,106 +428,307 @@ reasoning, so it does not by itself satisfy that story. The useful pattern is
 `--list-symbols` to see what is there, then a justified subset via
 `--exchanges`, `--limit`, or an explicit `--symbols` list.
 
-## The report
+## The dashboard
 
-`report.html`, rewritten every run and charted with **Plotly**: a rebased
-comparison of every symbol, a data-quality bar, then per symbol a closing-price
-chart and a daily volume chart, the measures, and tables of exactly what was
-quarantined and repaired.
+`python -m ETL_Analysis.dashboard` opens a six-tab streamlit app over
+`warehouse.duckdb`. It replaces the HTML report as the thing you actually look
+at after a run.
 
-```bash
-pip install plotly
-```
+| Tab | What is on it |
+|---|---|
+| **Overview** | Stat strip, every symbol rebased to 100 on one axis, a ranked table of all of them, and the disposition of every candle received |
+| **Claims** | The three business claims, each with its supporting chart and every figure re-checked against the store |
+| **Instrument** | One symbol: price with repaired points marked, daily volume, the spread of its daily returns, all 28 measures, and the rows they were computed from |
+| **Data quality** | Reconciliation, why rows were rejected, every quarantined candle, every repair and what it changed |
+| **Runs** | The append-only load ledger, one run inspected in detail, and one measure tracked across runs |
+| **SQL console** | A read-only query box over the store, with the schema beside it and eight worked examples |
 
-Plotly is required. There is no fallback renderer — a report that silently
-degrades to something else is one you cannot trust to look the same twice. If
-plotly is missing the pipeline says so plainly, and **still loads the data**;
-only the report is skipped.
+Every table has a CSV download. Every chart has the table it was drawn from
+next to it.
 
-### Offline by default
+### Why a dashboard and not a report
 
-The sprint requires artefacts that open with no network, so Plotly's
-JavaScript is **embedded in the document** — on the first figure only, so the
-~3MB bundle appears once rather than once per chart. That makes each report
-about 3–4MB.
+The report described **the run that wrote it**: the objects transform had just
+produced, for the symbols that run happened to pull. The dashboard describes
+**the store**: everything ever loaded, filtered however you like, including
+runs from last week.
 
-`--cdn-js` loads Plotly from a CDN instead: far smaller files, but they need a
-network to render, which fails the sprint's artefact rule. The footer says
-which mode produced the file.
+That difference is why it updates on every run without anything regenerating a
+file. Reads are cached against `store.store_stamp` — the store's path, mtime
+and size — so a pipeline run changes the file, the next page render misses the
+cache and re-reads, and nothing else invalidates anything. No polling, no
+build step.
 
-### How it is structured
+### What the cache key does not solve
 
-Every chart is built as a plain figure dict — `{"data": [...], "layout": {...}}`
-— by a pure function with no plotly import. Those are unit-tested directly:
-trace counts, x/y values, date handling, axis titles, JSON-serialisability.
-Plotly is touched only in `_render`, which turns a figure dict into an HTML
-fragment. So a chart showing the wrong number is a bug in a tested pure
-function, not somewhere inside the rendering.
+The key also includes the filter selection, and there are 2^144 symbol
+selections. Unbounded, every distinct one would retain its own copy of the rows
+for the life of the process — a full-universe slice pickles to **6.4 MB**, so a
+few filter changes is tens of megabytes held for good. The slice cache is
+therefore capped at four entries: re-reading the store takes about a second,
+and holding twenty of them does not.
 
-### Readability
+The stamp is also only `(path, mtime, size)`. A write that changes neither —
+same size, inside one filesystem timestamp tick — would go unnoticed until
+somebody pressed Reload. A five-minute TTL bounds how long that can last
+without anyone having to know it is a possibility.
 
-Both axes titled on every chart (`_axis()` takes the title as a required
-argument, not an optional one), titles that state the finding rather than
-naming the variables ("RELIANCE.NS rose 1.08% between 01 Jul and 14 Jul 2026"),
-and a colour-blind-safe palette (Okabe-Ito).
+**Reload from disk** clears this app's readers by name rather than calling
+`st.cache_data.clear()`, which would empty every cached function in the
+process. The same `refresh()` runs after a pipeline started from the rail, so
+the page is showing the rows that run just wrote.
 
-Two things Plotly does better than the earlier hand-built SVG:
+### The SQL console
 
-- **A real date axis.** A two-day gap is drawn as two days. The old
-  categorical axis spaced every point evenly however far apart the dates were.
-- **Null volume leaves a gap**, natively. A day the provider reported no volume
-  is passed as `null`, not `0` — a missing figure is not a day without trading,
-  and a zero bar would say it was. An annotation on the chart explains it.
+The panels answer the questions we thought of. The console is for the rest.
 
-Repaired rows are drawn as open diamonds on the price chart, so a reader can
-see at a glance which points were corrected rather than observed.
-
-On a wide pull the report reorganises itself: a ranked table of **every**
-symbol by return leads, the comparison chart shows only the six largest movers
-(and says so), and detail sections are capped at the twelve most extreme.
-Everything still loads to the store — only the rendering is trimmed.
-
-### Idempotency
-
-The contract requires re-running a load not to double-count. `daily_price` is
-merged on its natural key `(symbol, trade_date)`: the loader deletes exactly the
-dates it is about to write, then inserts. Deleting by date rather than by symbol
-means a narrow re-pull does not destroy history from a wider one.
-`quarantined_candle` is replaced per symbol. `load_run` is append-only, because
-the ledger is the history of loads rather than the current state.
-
-### Reconciliation
-
-`candles_in = rows_kept + rows_quarantined` is an invariant, checked in SQL
-after every run and reported by the pipeline. A non-empty result means a row was
-lost between arriving and landing — the failure this whole design exists to make
-visible.
-
-### Poking at the store
-
-```bash
-duckdb warehouse.duckdb
-```
+It opens the store **read-only**, so nothing typed into it can change what the
+pipeline loaded, and `store.check_query` rejects anything that is not a single
+read statement before the engine ever sees it. That second check is not
+redundant: read-only stops a write, but it does not stop `ATTACH`, `INSTALL`,
+`COPY ... TO` or `EXPORT`, which reach outside the file. It also turns a driver
+exception into a sentence naming what was wrong.
 
 ```sql
--- what landed
-SELECT symbol, count(*), min(trade_date), max(trade_date)
-  FROM daily_price GROUP BY symbol;
+-- the reconciliation invariant, checkable by hand
+SELECT run_id, symbol, candles_in, rows_kept, rows_quarantined
+  FROM load_run
+ WHERE candles_in <> rows_kept + rows_quarantined;
 
--- what did not, and why
-SELECT symbol, reason, raw_date, detail FROM quarantined_candle;
-
--- observed data only, excluding vendor-interpolated and repaired rows
-SELECT * FROM daily_price WHERE NOT synthetic AND NOT repaired;
-
--- the load history
-SELECT run_id, symbol, candles_in, rows_kept, rows_repaired, rows_quarantined
-  FROM load_run ORDER BY loaded_at DESC;
+-- observed rows only: neither repaired by us nor interpolated by the vendor
+SELECT symbol, trade_date, "close", volume
+  FROM daily_price
+ WHERE NOT synthetic AND NOT repaired;
 ```
 
-That last filter matters for `claims.md`: a claim resting on repaired or
-synthetic rows is a claim resting on numbers nobody observed, and the flags are
-there so a chart can exclude them.
+Results are capped at 2000 rows, and the page says when it truncated rather
+than quietly showing you a prefix.
+
+### The filter rail, and why the measures are recomputed
+
+The rail on the left scopes every tab at once: venue, symbols, date window, and
+two provenance switches -- *exclude repaired rows* and *exclude
+vendor-interpolated rows*.
+
+Those switches matter for `claims.md`. A claim resting on repaired or synthetic
+rows is a claim resting on numbers nobody observed, and the flags exist so a
+chart can exclude them.
+
+When they are on, **the measures are recomputed over what is left** rather than
+read back from `run_metric`. A stored metric describes the whole symbol as it
+was loaded, and showing it beside a filtered chart would put two different
+periods on one screen and label them the same. The recomputation goes through
+`transform.summarise_rows`, which is the same code path `transform()` itself
+uses -- so a number on the dashboard is one the transform tests already cover,
+and `test_store.py` asserts the round trip symbol by symbol.
+
+### DuckDB is one writer or many readers
+
+Not both. A dashboard that held the file open would block the next pipeline run
+from writing to it, which would make "updates on every run" false in the most
+annoying possible way. So connections are opened per read and closed
+immediately, never held across a page render.
+
+If the store is locked anyway -- you refreshed while a run was mid-load --
+`store.connect` copies the file and reads the copy, saying so on the page. On
+Windows, where the OS refuses to read a file DuckDB holds open at all, it
+retries briefly and then tells you a run is probably in progress. What it never
+does is show a traceback or hang.
+
+### The charts
+
+`charts.py` builds every figure as a plain `{"data": [...], "layout": {...}}`
+dict, with no plotting library imported. Those are unit-tested directly: trace
+counts, x/y values, date handling, axis titles, JSON-serialisability. Plotly is
+touched only where the app hands a figure to `st.plotly_chart`. So a chart
+showing the wrong number is a bug in a tested pure function.
+
+**Both axes are titled on every chart** -- `charts.axis()` takes the title as a
+required argument, not an optional one -- and titles state a finding rather than
+naming the variables.
+
+**No chart has two y-axes.** Price and volume are separate figures. Two scales
+on one plot invent a correlation by choosing where to align them, and the reader
+cannot see that choice. This is asserted, not merely intended.
+
+**A missing volume is null, not zero.** A day the provider reported no volume
+leaves a gap, and an annotation on the chart says so. A zero bar would claim a
+day with no trading.
+
+**Repaired points are open diamonds.** The shape carries it, not the colour, so
+it survives a greyscale print.
+
+#### The palette is validated, not chosen
+
+Okabe-Ito, which stays distinguishable under the common forms of colour vision
+deficiency. The **order** is the part that does the work: colours are assigned
+to series in order, so adjacent slots are the pair a reader most often has to
+tell apart.
+
+The previous order put reddish-purple next to bluish-green, whose separation
+under deuteranopia is dE 7.6 -- inside the band that is only defensible with a
+second, non-colour encoding. Moving orange between them lifts the worst adjacent
+pair to dE 9.6 deuteran and 20.0 normal-vision, clear of the 8 target, using the
+same six hexes.
+
+Three of the six sit below 3:1 contrast against the page. That is inherent to
+these hues, and it is met the way the rule allows: every chart has a table
+beside it carrying the same numbers, and series are named in a legend rather
+than identified by colour alone. `test_charts.py` pins the order and the
+specific pair that must not be adjacent, so a tidy-up cannot quietly undo it.
+
+Loaded clean / loaded after repair / quarantined are **states**, not identities,
+so they take a reserved status palette rather than three series slots -- and
+each one always carries its label.
+
+## Candle interval
+
+The pipeline requests a granularity, and the store keeps it as part of the
+grain.
+
+```bash
+python -m ETL_Analysis.pipeline --interval 1wk           # ask for weekly
+python -m ETL_Analysis.pipeline --interval 1mo --live
+```
+
+The dashboard's rail carries the same control: **Load more data** takes an
+interval, a symbol list and a live/offline switch, and runs the pipeline
+without leaving the page. When the store holds more than one granularity, a
+**Candle interval** selector appears above the filters and every tab shows one
+interval at a time.
+
+### It is part of the primary key, and that matters
+
+`daily_price` is keyed on `(symbol, trade_date, interval)`. Keying on
+`(symbol, trade_date)` alone cannot hold two granularities: a weekly candle and
+a daily candle can carry the same symbol and the same date and are **not the
+same fact**, so a weekly pull would either collide with the daily rows or
+silently replace them — and a chart would then draw two granularities as one
+series.
+
+Stores written before the interval existed are migrated on the next run.
+`CREATE TABLE IF NOT EXISTS` cannot add a column and no dialect can extend a
+primary key in place, so `load.migrate_interval_into_the_grain` rebuilds the
+table inside a transaction and stamps the existing rows `1d` — which is all the
+pipeline could produce until now. It is idempotent, and it logs what it did.
+
+### The rows say what arrived, not what was asked for
+
+The transform reads the granularity off the response rather than off the
+request. Asking the offline client for `1wk` gets you the fixtures, which are
+daily, and the rows say `1d` — the request is recorded in `meta` and the data
+is labelled honestly. A live API that declines an interval is visible in the
+store for the same reason, rather than being relabelled to match the ask.
+
+## The claims
+
+`claims.md` is the sprint deliverable, and it is **generated, not written**.
+Every figure in it is computed from the store; nothing is typed in. The
+dashboard's **Claims** tab renders the same claims from the same functions, so
+the document and the page cannot describe different data.
+
+```bash
+python -m ETL_Analysis.claims                  # regenerate claims.md
+python -m ETL_Analysis.pipeline --claims       # ...as part of a run
+python -m ETL_Analysis.claims --db my.duckdb --out somewhere/claims.md
+```
+
+### What is fixed, and what is computed
+
+The **question** is fixed, because choosing what is worth asking is judgement:
+
+| # | The question | Answered by |
+|---|---|---|
+| 1 | How much did stock selection matter, and when? | decile spread per quarter |
+| 2 | How far did the recovery actually reach? | median return against breadth |
+| 3 | Did the volatility regime come back down? | daily volatility either side of the selloff |
+
+Everything else is derived from the data:
+
+- **The period** — read off the store's own date bounds.
+- **The universe** — one listing per company, with the full period, at the
+  store's main interval. No exchange, symbol count or interval is named.
+- **The pivot** — the selloff is *found*: the quarter with the worst median
+  return. The rebound is the best quarter after it. Move the crash in the data
+  and the claims move with it, which `test_claims.py` asserts by generating
+  over two stores whose crash sits in different quarters and requiring the
+  sentences to differ.
+- **Every number in the sentence**, including the direction words: a store
+  where volatility fell back produces "the selloff did not leave a lasting
+  change" rather than the opposite.
+
+### A claim the data cannot support is reported, not invented
+
+A three-symbol fixture store cannot support a claim about a market. Generators
+return `available = False` with the reason instead of emitting a confident
+sentence about twelve rows:
+
+```
+unsupported - How far the recovery actually reached: Only 1 symbol has the
+full period. A claim about the market needs at least 20 for a distribution to
+mean anything.
+```
+
+`claims.md` prints those under *Claims this store cannot support*, and the
+dashboard warns on the tab. A thin store looks visibly thin rather than looking
+like there was nothing worth saying.
+
+### No claim rests on a number nobody traded at
+
+**Every** generator reads observed rows only — `NOT synthetic` — so none is
+argued from a candle the vendor interpolated. About 4% of NSE rows and 12% of
+BSE rows are interpolated, and on a dual-listed name those rows sit a median
+3.8% from the other venue's print for the same day.
+
+The universe also keeps **one listing per company**. `RELIANCE.NS` and
+`RELIANCE.BO` are one business, and counting both would weight it twice in
+every median and decile. The listing with more observed rows wins — which is
+the one with less of the vendor's filler in it.
+
+Both rules are asserted on every query rather than remembered:
+
+```python
+def test_no_claim_query_reads_a_vendor_interpolated_row():
+    for name in CLAIM_QUERIES:
+        assert "NOT d.synthetic" in getattr(C, name)
+```
+
+The interpolation rate is still measured — it is the evidence for the exclusion
+— and lives on the **Data quality** tab under *Why every claim excludes
+vendor-interpolated rows*.
+
+### Quarters are year-aware, and that was a bug
+
+The per-quarter figures key on **year and quarter**, not quarter alone. Keying
+on the quarter alone is fine for a single year and silently wrong past it: this
+store runs 26 Aug 2025 to 27 Aug 2026, so September 2025 and September 2026
+were being drawn as one line called "Q3" — joining two points a year apart and
+inventing the move between them.
+
+`charts.split_by_quarter` buckets on `(year, quarter)` and returns them
+chronologically, printing the year only when the rows actually span more than
+one. A single-year pull still reads "Q1", not "2026 Q1".
+
+## The legacy report
+
+`report.py` still works and is still supported. It writes one self-contained
+HTML file with the plotly bundle embedded, which opens on a machine with no
+network:
+
+```bash
+python -m ETL_Analysis.pipeline --legacy-report
+python -m ETL_Analysis.pipeline --legacy-report out/run.html
+python -m ETL_Analysis.pipeline --legacy-report --cdn-js   # smaller, needs a network
+```
+
+It is kept because **a served dashboard is not a committed artefact**. The
+sprint asks for chart artefacts that open with no network and can be pointed at
+from `claims.md`; a streamlit app cannot be committed, and cannot be assessed
+when nobody is running it. The dashboard is what you work with; the report is
+what you hand in.
+
+It is no longer written by default. The dashboard needs no artefact, and writing
+a 3.6MB file on every run to render something nobody opened is waste.
 
 ## Testing
 
@@ -380,19 +737,99 @@ pip install pytest
 pytest ETL_Analysis/tests -v
 ```
 
-151 tests. `test_load.py` runs the **real** DDL and the **real** SQL statements
-against an in-memory SQLite mirror — DuckDB and SQLite share the `?` placeholder
-style and accept the same ANSI DDL here, so statement correctness, column-order
-alignment and delete-then-insert idempotency are all covered without requiring
-`duckdb` to be installed to run the suite.
+**438 tests**, across nine modules:
 
-What that does **not** prove: DuckDB-specific type behaviour (`DECIMAL`
-precision, `TIMESTAMP` handling) and the `duckdb.connect` call itself. Run the
-pipeline against a real DuckDB file once and check a few rows to close that gap.
+| File | Covers |
+|---|---|
+| `test_transform.py` | the six defects, both modes, and that nothing is dropped |
+| `test_report.py` | the measures against independent computations, and the legacy report |
+| `test_symbols.py` | the universe file, the quota arithmetic, and a wide pull |
+| `test_load.py` | the real DDL and the real SQL, against an in-memory SQLite mirror |
+| `test_store.py` | the SQL guard, the record shaping, and the DuckDB round trip |
+| `test_charts.py` | every figure builder, and the readability rules |
+| `test_claims.py` | that claims are derived from the data, refuse to overreach, and render `claims.md` |
+| `test_dashboard.py` | the page helpers, and the real app driven end to end |
+| `test_pipeline.py` | the wiring: injection, failure handling, flags, exit codes |
+
+Nothing touches the network.
+
+### It runs on a machine with none of the optional dependencies
+
+318 of the 438 pass with `duckdb`, `streamlit`, `plotly` and `pandas` all
+absent. The tests that genuinely need a database **skip**, and they skip from a
+fixture rather than at module level, so the pure half of each file keeps
+running:
+
+```
+pytest ETL_Analysis/tests            # 438 passed
+# without plotly                     # 438 passed  -- the page degrades
+# without duckdb                     # 318 passed, 92 skipped
+# without streamlit                  # 410 passed, 28 skipped
+```
+
+Note the plotly row. The dashboard does not *fail* without plotly, it loses its
+charts: `st.plotly_chart` reaches for `plotly.tools`, so a missing plotly used
+to surface as a traceback in the middle of the page. The page now checks first,
+says what to install, and renders everything else -- which is worth having,
+because every chart on it has a table beside it carrying the same numbers.
+
+### What the SQLite mirror proves, and what it does not
+
+`test_load.py` runs the real DDL and the real INSERT/DELETE statements against
+an in-memory SQLite database — DuckDB and SQLite share the `?` placeholder
+style and accept the same ANSI DDL here — so statement correctness, column-order
+alignment and delete-then-insert idempotency are covered without needing DuckDB
+installed.
+
+It cannot prove DuckDB-specific type behaviour. That gap is now closed by
+`test_store.py`, which loads a **real** DuckDB file with the real loader and
+reads it back: `DECIMAL` arriving as `Decimal` rather than `float` is a bug the
+mirror cannot see and a chart cannot survive, and it is asserted directly.
+
+### The round trip is the load-bearing test
+
+`test_the_store_gives_back_the_measures_the_pipeline_put_in` runs the pipeline,
+reads the store back through `store.build_results`, and compares measure by
+measure and row by row against what `transform` produced in memory.
+
+If that ever drifts, a chart drawn from the store disagrees with the run that
+produced it and neither one is obviously the wrong one. It is the reason the
+dashboard can be trusted to be showing the pipeline's numbers rather than its
+own.
+
+### The suite used to hang, and why
+
+Before this sprint's fixes, `pytest ETL_Analysis/tests` never finished on a
+machine with plotly installed. Three separate causes, all worth knowing:
+
+1. **`assert "cdn.plot.ly" not in document`.** Plotly's embedded bundle names
+   its own CDN in a licence comment, so the assertion was false in a file that
+   fetches nothing. The question has to be asked of the script tags, not of the
+   text: `HtmlDoc.script_srcs()` returns the URLs the page would actually
+   fetch, and an offline artefact returns an empty list.
+
+2. **A failing `in` assertion over a 3.6MB string.** pytest builds that failure
+   message by running difflib over the whole document. Measured on this suite:
+   **3 hours 57 minutes** to report six failures, essentially all of it inside
+   the failure-message machinery rather than in the tests. So a stale assertion
+   presented as a hung suite rather than as a red test. Every assertion against
+   a rendered report now goes through the `html` fixture, which asserts on
+   short derived values — the same suite now runs in 25 seconds.
+
+3. **Tests written against the stub, not the library.** `conftest.py` stubs
+   plotly when it is absent, and the stub used to emit a marker only it
+   produced. Assertions on that marker passed without plotly and failed with
+   it. The stub now imitates plotly's own output shape — the bundle banner, a
+   `src=`-bearing script tag in CDN mode — so an assertion means the same thing
+   either way.
+
+Three more tests were reading `data[0]` from the per-symbol figures, which
+became a stale assumption when those charts were split into one trace per
+calendar quarter: `data[0]` is Q1, and the fixtures are all July. They now
+aggregate across the four buckets, and a new test pins the four-bucket
+structure so the same regression cannot recur silently.
 
 ## Still to do
 
-- `claims.md` — three business claims, each naming the chart that supports it
-  (the report's chart sections are the artefacts to point at)
 - `pyproject.toml` so `pip install -e 'ETL_Analysis[dev]'` works from a clean
   machine (`tests/conftest.py` handles imports until then)

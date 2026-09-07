@@ -1,32 +1,3 @@
-"""Report: one self-contained HTML file per run, charted with Plotly.
-
-Writes `report.html`. Not part of the ETL core -- extract, transform and load
-are the pipeline; this renders what the pipeline produced.
-
-PLOTLY IS REQUIRED
-    `pip install plotly`. There is no fallback renderer: a report that silently
-    degrades to something else is a report you cannot trust to look the same
-    twice. If plotly is missing, `build_report` raises and says so.
-
-    (`report_svg.py` still holds the dependency-free renderer, if you ever need
-    a report on a machine without plotly. It is not wired to the pipeline.)
-
-OFFLINE BY DEFAULT
-    The sprint requires chart artefacts that open with no network. Plotly's
-    JavaScript is therefore INLINED into the document -- `include_plotlyjs=True`
-    on the first figure only, so the ~3MB bundle appears once rather than once
-    per chart. Pass `inline_js=False` to use the CDN instead: much smaller
-    files, but they need a network to render, which fails the sprint's bar.
-
-STRUCTURE
-    Every chart is built as a plain figure dict -- `{"data": [...],
-    "layout": {...}} -- by a pure function with no plotly import. Those are
-    fully unit-tested: trace counts, x/y values, date alignment, axis titles.
-    Plotly is only touched in `_render`, which turns a figure dict into an
-    HTML fragment. So if a chart shows the wrong numbers, the bug is in a
-    tested pure function, not in the rendering.
-"""
-
 from __future__ import annotations
 
 import html
@@ -35,23 +6,15 @@ from pathlib import Path
 
 DEFAULT_REPORT_PATH = "report.html"
 
-# A line chart stops being readable somewhere around six series, and a report
-# with a section per symbol stops being readable long before a few hundred.
-# Above these, the report leads with a ranked table and charts only the
-# extremes -- which is what a reader wants from a wide pull anyway.
 MAX_COMPARISON_SERIES = 6
 MAX_DETAIL_SECTIONS = 12
 
-# Colour-blind-safe qualitative palette (Okabe-Ito). Distinguishable under the
-# most common forms of colour vision deficiency, which a default red/green
-# palette is not.
 SERIES_COLOURS = ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00",
                   "#56B4E9"]
 COLOUR_GOOD = "#009E73"
 COLOUR_REPAIRED = "#E69F00"
 COLOUR_BAD = "#D55E00"
 
-# Shared layout. Kept in one place so every chart in the report looks alike.
 BASE_LAYOUT = {
     "template": "plotly_white",
     "font": {"family": "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, "
@@ -65,21 +28,14 @@ BASE_LAYOUT = {
 
 PLOTLY_CONFIG = {"displaylogo": False, "responsive": True}
 
-# Calendar quarters, independent of year -- a report typically covers a
-# single year or less, so "Q1" unambiguously means Jan-Mar within it.
 QUARTER_LABELS = ("Q1", "Q2", "Q3", "Q4")
 
 
 class PlotlyMissing(ImportError):
-    """plotly is not installed. The report cannot be rendered without it."""
+    pass
 
-
-# ---------------------------------------------------------------------------
-# Formatting
-# ---------------------------------------------------------------------------
 
 def format_value(value: float, unit: str) -> str:
-    """Render a metric for display, according to its unit."""
     if value is None:
         return "-"
     if unit == "pct":
@@ -98,40 +54,21 @@ def format_value(value: float, unit: str) -> str:
 
 
 def _e(text) -> str:
-    """Escape for an HTML text node."""
     return html.escape(str(text), quote=True)
 
 
 def _axis(title: str, **extra) -> dict:
-    """An axis with its title always set.
-
-    A required argument rather than an optional one: the sprint is explicit
-    that a non-technical reader must be able to read a chart unaided, and an
-    unlabelled axis is the usual way that fails.
-    """
     axis = {"title": {"text": title}, "gridcolor": "#e6e9ee",
             "linecolor": "#5b6470", "zeroline": False}
     axis.update(extra)
     return axis
 
 
-# ---------------------------------------------------------------------------
-# Quarterly segmentation, shared by the per-symbol time series figures.
-# ---------------------------------------------------------------------------
-
 def _quarter_of(day: date) -> int:
-    """Calendar quarter (1-4) a date falls in."""
     return (day.month - 1) // 3 + 1
 
 
 def _split_by_quarter(rows: list[dict]) -> list[list[dict]]:
-    """Rows grouped into Q1..Q4 buckets, each kept in date order.
-
-    Always returns four buckets, even when a quarter has no rows, so the
-    trace built from bucket `i` always lands at index `i` -- which is what
-    lets `_quarter_updatemenu` address traces by a fixed position rather
-    than a value that would shift with the data.
-    """
     buckets: list[list[dict]] = [[], [], [], []]
     for row in rows:
         buckets[_quarter_of(row["date"]) - 1].append(row)
@@ -139,12 +76,6 @@ def _split_by_quarter(rows: list[dict]) -> list[list[dict]]:
 
 
 def _quarter_updatemenu() -> dict:
-    """Buttons that isolate one quarter's trace, or show all four.
-
-    Client-side only (plotly's `restyle` runs in the browser), so this works
-    in the offline, no-backend HTML file the report already is. Assumes the
-    figure's traces are exactly [Q1, Q2, Q3, Q4] in that order.
-    """
     buttons = [{
         "label": "All quarters", "method": "restyle",
         "args": [{"visible": [True, True, True, True]}],
@@ -160,23 +91,7 @@ def _quarter_updatemenu() -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Figure builders. Pure: dicts in, dicts out, no plotly import, fully tested.
-# ---------------------------------------------------------------------------
-
 def comparison_figure(results: list[dict]) -> tuple[dict | None, bool]:
-    """Every symbol rebased to 100, so instruments at different price levels
-    are comparable on one axis.
-
-    Returns (figure, trimmed). `trimmed` is True when only the biggest movers
-    are charted, so the caller can say so rather than letting a reader think
-    six symbols was all there was.
-
-    Series carry their own x values -- real dates -- rather than sharing an
-    index. Positioning by index would draw one symbol's fourth point on
-    another symbol's fourth date, silently claiming a price moved on a day it
-    did not.
-    """
     charted = [r for r in results if len(r["rows"]) >= 2]
     if not charted:
         return None, False
@@ -219,11 +134,6 @@ def comparison_figure(results: list[dict]) -> tuple[dict | None, bool]:
 
 
 def quality_figure(results: list[dict]) -> dict | None:
-    """Stacked bars: how each symbol's candles were dispositioned.
-
-    The visual form of the reconciliation invariant -- every candle received is
-    either loaded or quarantined, and the bar lengths add up to what arrived.
-    """
     if not results:
         return None
 
@@ -262,12 +172,6 @@ def quality_figure(results: list[dict]) -> dict | None:
 
 
 def close_figure(result: dict) -> dict | None:
-    """One symbol's closing price, with a title that states the finding.
-
-    Split into one trace per calendar quarter (always Q1..Q4, in that
-    order) so the buttons above the chart can isolate a single quarter or
-    show all of them -- see `_quarter_updatemenu`.
-    """
     rows = result["rows"]
     if not rows:
         return None
@@ -287,9 +191,6 @@ def close_figure(result: dict) -> dict | None:
             "y": [r["close"] for r in quarter_rows],
             "line": {"color": colour, "width": 2.5},
             "marker": {
-                # Repaired rows are drawn as open diamonds so a reader can
-                # see at a glance which points were corrected rather than
-                # observed.
                 "size": [9 if r["repaired"] else 6 for r in quarter_rows],
                 "symbol": ["diamond-open" if r["repaired"] else "circle"
                            for r in quarter_rows],
@@ -317,15 +218,6 @@ def close_figure(result: dict) -> dict | None:
 
 
 def volume_figure(result: dict) -> dict | None:
-    """One symbol's daily traded volume.
-
-    A day with no reported volume is passed to plotly as null, which leaves a
-    gap rather than drawing a zero bar. A missing figure is not a day without
-    trading, and a zero bar would say it was.
-
-    Split into one trace per calendar quarter, same as `close_figure`, so
-    the same quarter buttons isolate a single quarter here too.
-    """
     rows = result["rows"]
     if not rows:
         return None
@@ -367,11 +259,6 @@ def volume_figure(result: dict) -> dict | None:
     return {"data": traces, "layout": layout}
 
 
-# ---------------------------------------------------------------------------
-# The plotly boundary. Everything above is pure; this is the only part that
-# needs plotly installed.
-# ---------------------------------------------------------------------------
-
 def _plotly_io():
     try:
         import plotly.io as pio
@@ -384,12 +271,6 @@ def _plotly_io():
 
 
 def _render(figure: dict, include_js: bool, inline_js: bool = True) -> str:
-    """Turn a figure dict into an HTML fragment.
-
-    `include_js` must be True for exactly ONE figure in the document -- the
-    plotly bundle is ~3MB and repeating it per chart would make the file
-    unusable. Every later figure passes False and reuses the loaded library.
-    """
     pio = _plotly_io()
     if include_js:
         js = True if inline_js else "cdn"
@@ -403,10 +284,6 @@ def _render(figure: dict, include_js: bool, inline_js: bool = True) -> str:
         default_width="100%",
     )
 
-
-# ---------------------------------------------------------------------------
-# Page assembly
-# ---------------------------------------------------------------------------
 
 CSS = """
 :root { --ink:#1a1f26; --muted:#5b6470; --line:#e6e9ee; --bg:#f7f8fa; }
@@ -447,7 +324,7 @@ def _metric_cards(result: dict, metric_fn) -> str:
     cards = []
     for m in metric_fn(result):
         if m["unit"] == "rows":
-            continue  # shown in the data-quality section instead
+            continue
         cards.append(
             f'<div class="metric"><span class="label">{_e(m["label"])}</span>'
             f'<span class="value">{_e(format_value(m["value"], m["unit"]))}'
@@ -489,7 +366,6 @@ def _repair_table(result: dict) -> str:
 
 
 def _leaderboard(results: list[dict]) -> str:
-    """Ranked table of every symbol. The entry point for a wide pull."""
     scored = [r for r in results if r["rows"]]
     if not scored:
         return ""
@@ -519,13 +395,6 @@ def _leaderboard(results: list[dict]) -> str:
 def build_report(results: list[dict], run_id: str, metric_fn,
                  generated_at: datetime | None = None,
                  inline_js: bool = True) -> str:
-    """Return the complete HTML document as a string.
-
-    `metric_fn` is `transform.metrics`, injected rather than imported so this
-    module stays testable in isolation.
-
-    Raises PlotlyMissing if plotly is not installed.
-    """
     generated_at = generated_at or datetime.now()
     loaded = sum(r["summary"]["rows_kept"] for r in results)
     quarantined = sum(r["summary"]["rows_quarantined"] for r in results)
@@ -533,7 +402,6 @@ def build_report(results: list[dict], run_id: str, metric_fn,
     received = sum(r["summary"]["candles_in"] for r in results)
     reconciled = received == loaded + quarantined
 
-    # The plotly bundle goes into the first figure rendered and no other.
     state = {"js_done": False}
 
     def chart(figure) -> str:
@@ -585,12 +453,8 @@ def build_report(results: list[dict], run_id: str, metric_fn,
         body.append("<h2>Every symbol, ranked by return</h2>")
         body.append(f'<div class="card">{_leaderboard(results)}</div>')
 
-    # --- Per symbol -----------------------------------------------------
     detail = results
     if len(results) > MAX_DETAIL_SECTIONS:
-        # Detail the extremes rather than everything: the table above already
-        # covers all of them, and 200 chart pairs is not a document anyone
-        # reads.
         ranked = sorted([r for r in results if r["rows"]],
                         key=lambda r: r["summary"]["period_return_pct"])
         half = MAX_DETAIL_SECTIONS // 2
@@ -639,7 +503,6 @@ def build_report(results: list[dict], run_id: str, metric_fn,
 
 def write_report(results: list[dict], run_id: str, metric_fn,
                  path: str = DEFAULT_REPORT_PATH, inline_js: bool = True) -> str:
-    """Write the report and return the path written."""
     document = build_report(results, run_id, metric_fn, inline_js=inline_js)
     destination = Path(path)
     if destination.parent != Path(""):

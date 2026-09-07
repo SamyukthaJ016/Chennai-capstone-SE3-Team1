@@ -1,4 +1,4 @@
-email,password
+email,password_hash
 aarav.mehta@example.com,$2b$12$SEEDDATAONLYnotarealhashXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 diya.sharma@example.com,$2b$12$SEEDDATAONLYnotarealhashXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 rohan.iyer@example.com,$2b$12$SEEDDATAONLYnotarealhashXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX

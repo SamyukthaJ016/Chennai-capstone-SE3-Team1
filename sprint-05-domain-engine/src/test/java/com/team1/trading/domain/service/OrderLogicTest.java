@@ -1,11 +1,11 @@
 package com.team1.trading.domain.service;
 
-import com.team1.trading.domain.dto.OrderSide;
 import com.team1.trading.domain.dto.PlaceOrderRequest;
 import com.team1.trading.domain.entity.Client;
 import com.team1.trading.domain.entity.Instrument;
 import com.team1.trading.domain.entity.Order;
 import com.team1.trading.domain.entity.PortfolioHolding;
+import com.team1.trading.domain.entity.types.OrderSide;
 import com.team1.trading.domain.entity.types.OrderStatus;
 import com.team1.trading.domain.exception.AccountNotActiveException;
 import com.team1.trading.domain.exception.AccountNotFoundException;
@@ -34,10 +34,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Business rules 1 to 8, each one firing and each one not firing, plus the
- * evaluation order itself.
- */
 class OrderLogicTest {
 
     private static final long ACCOUNT_ID = 1L;
@@ -60,13 +56,13 @@ class OrderLogicTest {
     }
 
     private Client account(long accountId, String balance, String state) {
-        Client client = new Client(accountId, (int) accountId, "Holder " + accountId,
+        Client client = new Client(accountId, String.valueOf(accountId), "Holder " + accountId,
                 "holder" + accountId + "@example.com", "900000000" + accountId);
         client.credit(new BigDecimal(balance));
         if ("SUSPENDED".equals(state)) {
             client.suspend();
-        } else if ("INACTIVE".equals(state)) {
-            client.deactivate();
+        } else if ("INACTIVE".equals(state) || "CLOSED".equals(state)) {
+            client.close();
         }
         accounts.put(accountId, client);
         return client;
@@ -96,8 +92,6 @@ class OrderLogicTest {
         return new PlaceOrderRequest(ACCOUNT_ID, SYMBOL, OrderSide.SELL, quantity, new BigDecimal(price), KEY);
     }
 
-    // ---------- rule 1 : the account must exist : ACC-404 ----------
-
     @Nested
     @DisplayName("Rule 1 - the account must exist")
     class Rule1Tests {
@@ -122,8 +116,6 @@ class OrderLogicTest {
             assertDoesNotThrow(() -> service.placeOrder(buy(10, "5.00")));
         }
     }
-
-    // ---------- rule 2 : the account must be ACTIVE : ACC-403 ----------
 
     @Nested
     @DisplayName("Rule 2 - the account must be ACTIVE")
@@ -160,8 +152,6 @@ class OrderLogicTest {
             assertDoesNotThrow(() -> service.placeOrder(buy(10, "5.00")));
         }
     }
-
-    // ---------- rule 3 : the instrument must exist and be tradable : INS-404 ----------
 
     @Nested
     @DisplayName("Rule 3 - the instrument must exist and be tradable")
@@ -200,8 +190,6 @@ class OrderLogicTest {
         }
     }
 
-    // ---------- rule 4 : quantity greater than zero : VAL-422 ----------
-
     @Nested
     @DisplayName("Rule 4 - quantity must be greater than zero")
     class Rule4Tests {
@@ -229,7 +217,7 @@ class OrderLogicTest {
         }
 
         @Test
-        @DisplayName("Fires when quantity is absent, because a replaying caller never ran a validator")
+        @DisplayName("Fires when quantity is absent")
         void fires_whenQuantityNull() {
             PlaceOrderRequest request = buy(10, "5.00");
             request.setQuantity(null);
@@ -238,13 +226,11 @@ class OrderLogicTest {
         }
 
         @Test
-        @DisplayName("Does not fire when quantity is one, the smallest legal quantity")
+        @DisplayName("Does not fire when quantity is one")
         void doesNotFire_whenQuantityIsOne() {
             assertDoesNotThrow(() -> service.placeOrder(buy(1, "5.00")));
         }
     }
-
-    // ---------- rule 5 : price greater than zero : VAL-422 ----------
 
     @Nested
     @DisplayName("Rule 5 - price must be greater than zero")
@@ -282,13 +268,11 @@ class OrderLogicTest {
         }
 
         @Test
-        @DisplayName("Does not fire when price is one penny, the smallest legal price")
+        @DisplayName("Does not fire when price is one penny")
         void doesNotFire_whenPriceIsOnePenny() {
             assertDoesNotThrow(() -> service.placeOrder(buy(10, "0.01")));
         }
     }
-
-    // ---------- rule 6 : a BUY needs the cash : ORD-400 ----------
 
     @Nested
     @DisplayName("Rule 6 - on a BUY the balance must cover quantity times price")
@@ -325,8 +309,6 @@ class OrderLogicTest {
             assertDoesNotThrow(() -> service.placeOrder(sell(10, "5.00")));
         }
     }
-
-    // ---------- rule 7 : a SELL needs the holding : ORD-409 ----------
 
     @Nested
     @DisplayName("Rule 7 - on a SELL the held quantity must cover the order")
@@ -375,8 +357,6 @@ class OrderLogicTest {
         }
     }
 
-    // ---------- rule 8 : the idempotency key : ORD-409 ----------
-
     @Nested
     @DisplayName("Rule 8 - the idempotency key must not already have been used")
     class Rule8Tests {
@@ -424,8 +404,6 @@ class OrderLogicTest {
                     "a key already claimed must not be claimable a second time");
         }
     }
-
-    // ---------- the evaluation order itself ----------
 
     @Nested
     @DisplayName("Evaluation order - the first failure wins")
@@ -515,8 +493,6 @@ class OrderLogicTest {
                     () -> service.placeOrder(sell(1000, "5.00")));
         }
     }
-
-    // ---------- what an accepted order looks like ----------
 
     @Nested
     @DisplayName("An order that passes all eight rules")

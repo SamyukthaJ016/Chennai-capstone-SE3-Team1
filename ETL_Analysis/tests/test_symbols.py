@@ -1,11 +1,3 @@
-"""Tests over the symbol universe and the report's behaviour on a wide pull.
-
-Nothing here touches the network, and nothing needs to: the universe is a
-file, so it is read and checked directly. The rest covers the quota
-arithmetic and what the report does when a pull returns far more symbols than
-a chart can usefully show.
-"""
-
 from __future__ import annotations
 
 import re
@@ -17,10 +9,6 @@ from ETL_Analysis import report as R
 from ETL_Analysis import symbols as S
 from ETL_Analysis import transform as T
 
-
-# ---------------------------------------------------------------------------
-# Filtering
-# ---------------------------------------------------------------------------
 
 UNIVERSE = ["RELIANCE.NS", "INFY.NS", "TATASTEEL.BO", "AAPL", "MSFT",
             "FX:EUR/USD", "X:BTCUSD"]
@@ -49,10 +37,6 @@ def test_symbols_are_grouped_by_venue():
         "NSE": 2, "US": 2, "BSE": 1, "FX": 1, "CRYPTO": 1}
 
 
-# ---------------------------------------------------------------------------
-# Quota arithmetic
-# ---------------------------------------------------------------------------
-
 @pytest.mark.parametrize("payload,expected", [
     ({"remaining": 1900}, 1900),
     ({"requestsRemaining": 1850}, 1850),
@@ -78,7 +62,6 @@ def test_cached_symbols_do_not_count_against_the_quota():
 
 
 def test_a_pull_larger_than_the_quota_is_refused(monkeypatch):
-    """Refusing before the pull beats a half-finished dataset that looks whole."""
     monkeypatch.setattr(S, "remaining_quota", lambda: 5)
     with pytest.raises(S.QuotaTooLow) as exc:
         S.plan_pull([f"SYM{i}" for i in range(50)])
@@ -86,14 +69,9 @@ def test_a_pull_larger_than_the_quota_is_refused(monkeypatch):
 
 
 def test_an_unreadable_usage_response_does_not_block_the_pull(monkeypatch):
-    """/usage is advisory. If it cannot be read, proceed rather than refuse."""
     monkeypatch.setattr(S, "remaining_quota", lambda: None)
     assert S.plan_pull(["A", "B"])["ok"]
 
-
-# ---------------------------------------------------------------------------
-# The report on a wide pull
-# ---------------------------------------------------------------------------
 
 def _synthetic(symbol: str, drift: float, days: int = 8) -> dict:
     base = 100.0
@@ -117,7 +95,6 @@ def _synthetic(symbol: str, drift: float, days: int = 8) -> dict:
 
 @pytest.fixture
 def wide():
-    """40 symbols with a spread of returns, as a full pull would give."""
     return [_synthetic(f"SYM{i:02d}.NS", (i - 20) / 1000)
             for i in range(40)]
 
@@ -128,29 +105,25 @@ def wide_doc(wide):
 
 
 def test_the_comparison_chart_is_capped_so_it_stays_readable(wide):
-    """A line chart of forty series shows nothing."""
     figure, trimmed = R.comparison_figure(wide)
     assert trimmed is True
     assert len(figure["data"]) == R.MAX_COMPARISON_SERIES
 
 
 def test_the_capped_chart_keeps_the_biggest_movers(wide):
-    """If only six are charted, they should be the six worth looking at."""
     figure, _ = R.comparison_figure(wide)
     charted = {t["name"] for t in figure["data"]}
-    assert "SYM39.NS" in charted   # largest riser
-    assert "SYM00.NS" in charted   # largest faller
+    assert "SYM39.NS" in charted
+    assert "SYM00.NS" in charted
 
 
-def test_a_trimmed_chart_says_it_was_trimmed(wide_doc):
-    """A reader must not think six symbols is all there was."""
-    assert "largest movers" in wide_doc
+def test_a_trimmed_chart_says_it_was_trimmed(html, wide_doc):
+    html(wide_doc).assert_contains("largest movers")
 
 
-def test_every_symbol_appears_in_the_ranked_table(wide, wide_doc):
-    """Charts are capped; the table is not. Nothing is hidden."""
-    for result in wide:
-        assert result["summary"]["symbol"] in wide_doc
+def test_every_symbol_appears_in_the_ranked_table(html, wide, wide_doc):
+    html(wide_doc).assert_contains(
+        *[result["summary"]["symbol"] for result in wide])
 
 
 def test_detail_sections_are_capped(wide_doc):
@@ -158,31 +131,28 @@ def test_detail_sections_are_capped(wide_doc):
 
 
 def test_the_ranked_table_is_ordered_by_return(wide_doc):
-    """Best first: the ordering is the point of the table."""
     symbols = re.findall(r"<tr><td>(SYM\d+\.NS)</td>", wide_doc)
     assert symbols[0] == "SYM39.NS"
     assert symbols[-1] == "SYM00.NS"
 
 
-def test_a_wide_report_still_embeds_the_bundle_only_once(wide_doc):
-    """Forty symbols means many charts; the bundle must not repeat."""
-    assert wide_doc.count("plotly-bundle") == 1
+def test_a_wide_report_still_embeds_the_bundle_only_once(html, wide_doc):
+    assert html(wide_doc).embedded_bundle_count() == 1
 
 
-def test_a_narrow_pull_charts_everything(wide):
-    """The caps must not kick in on a small pull."""
+def test_a_wide_report_still_opens_with_no_network(html, wide_doc):
+    assert html(wide_doc).script_srcs() == []
+
+
+def test_a_narrow_pull_charts_everything(html, wide):
     few = wide[:3]
     figure, trimmed = R.comparison_figure(few)
     assert trimmed is False
     assert len(figure["data"]) == 3
-    document = R.build_report(few, "NARROW", T.metrics)
-    assert "largest movers" not in document
-    assert document.count("<h2>SYM") == 3
+    doc = html(R.build_report(few, "NARROW", T.metrics))
+    doc.assert_absent("largest movers")
+    assert doc.count("<h2>SYM") == 3
 
-
-# ---------------------------------------------------------------------------
-# The bundled symbol file
-# ---------------------------------------------------------------------------
 
 def test_the_bundled_universe_loads():
     universe = S.load_symbol_file()
@@ -190,7 +160,6 @@ def test_the_bundled_universe_loads():
 
 
 def test_no_comment_text_leaks_into_a_symbol():
-    """Company names sit beside tickers as comments; they must be stripped."""
     for symbol in S.load_symbol_file():
         assert "#" not in symbol
         assert " " not in symbol
@@ -203,7 +172,6 @@ def test_the_universe_has_no_duplicates():
 
 
 def test_the_universe_covers_both_indian_venues():
-    """SEC3-103 wants at least two NSE or BSE instruments; this has both."""
     grouped = S.group_by_exchange(S.load_symbol_file())
     assert grouped["NSE"] > 50
     assert grouped["BSE"] > 10
@@ -215,7 +183,6 @@ def test_every_symbol_carries_an_indian_venue_suffix():
 
 
 def test_file_order_is_preserved(tmp_path):
-    """A --limit'd pull takes the first N, so order is meaningful."""
     path = tmp_path / "u.txt"
     path.write_text("# header\nZZZ.NS  # last alphabetically\nAAA.NS\n\nBBB.BO\n")
     assert S.load_symbol_file(path) == ["ZZZ.NS", "AAA.NS", "BBB.BO"]

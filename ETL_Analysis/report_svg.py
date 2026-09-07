@@ -1,30 +1,3 @@
-"""Report: one self-contained HTML file per run.
-
-Writes `report.html` with the run's charts and metrics. Not part of the ETL
-core -- extract, transform and load are the pipeline; this renders what the
-pipeline produced.
-
-NO DEPENDENCIES, AND WHY
-    The sprint requires chart artefacts that "open without a network", which
-    rules out anything fetching JavaScript from a CDN at render time. plotly
-    can inline its own JS and would satisfy that. This module instead emits
-    hand-built inline SVG, which satisfies it more strongly: there is no
-    JavaScript at all, no library version to pin, and the file renders in any
-    browser, in an email, or in a PDF export.
-
-    The trade-off is that the charts are static rather than interactive. If
-    the review wants hover tooltips and zoom, swap this module for a plotly
-    implementation writing to the same path -- `write_report()` is the only
-    entry point the pipeline calls.
-
-CHART READABILITY
-    The sprint is explicit that a non-technical reader must be able to read a
-    chart unaided: both axes labelled with units, a title that states the
-    finding rather than naming the variables, no bare ticker without the
-    company, no unexplained abbreviation. The helpers below take a title and
-    axis labels as required arguments for that reason.
-"""
-
 from __future__ import annotations
 
 import html
@@ -33,16 +6,9 @@ from pathlib import Path
 
 DEFAULT_REPORT_PATH = "report.html"
 
-# A line chart stops being readable somewhere around six series, and a report
-# with a section per symbol stops being readable long before a few hundred.
-# Above these, the report leads with a ranked table and charts only the
-# extremes -- which is what a reader wants from a wide pull anyway.
 MAX_COMPARISON_SERIES = 6
 MAX_DETAIL_SECTIONS = 12
 
-# Colour-blind-safe qualitative palette (Okabe-Ito). Distinguishable for the
-# most common forms of colour vision deficiency, which a default red/green
-# palette is not.
 SERIES_COLOURS = ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00"]
 COLOUR_GOOD = "#009E73"
 COLOUR_REPAIRED = "#E69F00"
@@ -51,12 +17,7 @@ COLOUR_AXIS = "#5b6470"
 COLOUR_GRID = "#e6e9ee"
 
 
-# ---------------------------------------------------------------------------
-# Formatting
-# ---------------------------------------------------------------------------
-
 def format_value(value: float, unit: str) -> str:
-    """Render a metric for display, according to its unit."""
     if value is None:
         return "-"
     if unit == "pct":
@@ -75,12 +36,10 @@ def format_value(value: float, unit: str) -> str:
 
 
 def _e(text) -> str:
-    """Escape for HTML/SVG text nodes."""
     return html.escape(str(text), quote=True)
 
 
 def _nice_ceiling(value: float) -> float:
-    """Round an axis maximum up to something a reader can hold in their head."""
     if value <= 0:
         return 1.0
     magnitude = 10 ** (len(str(int(value))) - 1)
@@ -90,10 +49,6 @@ def _nice_ceiling(value: float) -> float:
             return candidate
     return magnitude * 10
 
-
-# ---------------------------------------------------------------------------
-# SVG chart builders
-# ---------------------------------------------------------------------------
 
 def line_chart(
     series: list[dict],
@@ -105,16 +60,6 @@ def line_chart(
     height: int = 320,
     y_from_zero: bool = False,
 ) -> str:
-    """Multi-series line chart.
-
-    series: [{"name": str, "points": [(label, value), ...]}]
-
-    `categories` is the shared x axis. Series are aligned to it BY LABEL, not
-    by position, so two instruments with different trading days land on the
-    right dates: a symbol that did not trade on a given day leaves a gap there
-    rather than shifting its whole line leftwards. Passing no categories means
-    the union of every series' labels, in first-seen order.
-    """
     left, right, top, bottom = 78, 24, 46, 62
     plot_w = width - left - right
     plot_h = height - top - bottom
@@ -153,7 +98,6 @@ def line_chart(
         f'text-anchor="middle">{_e(title)}</text>',
     ]
 
-    # Horizontal gridlines with value labels.
     for i in range(5):
         value = y_min + (y_max - y_min) * i / 4
         y = y_at(value)
@@ -166,7 +110,6 @@ def line_chart(
             f'text-anchor="end">{value:,.1f}</text>'
         )
 
-    # X tick labels, thinned so they never overlap.
     every = max(1, len(labels) // 8)
     for i, label in enumerate(labels):
         if i % every and i != len(labels) - 1:
@@ -177,7 +120,6 @@ def line_chart(
             f'{top + plot_h + 20})">{_e(label)}</text>'
         )
 
-    # Series, positioned by category label rather than by list index.
     for index, entry in enumerate(series):
         colour = SERIES_COLOURS[index % len(SERIES_COLOURS)]
         placed = [
@@ -197,7 +139,6 @@ def line_chart(
                 f'fill="{colour}"/>'
             )
 
-    # Axes.
     parts.append(
         f'<line x1="{left}" y1="{top}" x2="{left}" y2="{top + plot_h}" '
         f'stroke="{COLOUR_AXIS}" stroke-width="1.5"/>'
@@ -241,7 +182,6 @@ def bar_chart(
     height: int = 300,
     colour: str = SERIES_COLOURS[0],
 ) -> str:
-    """Vertical bar chart. bars: [(label, value), ...]"""
     left, right, top, bottom = 84, 24, 46, 62
     plot_w = width - left - right
     plot_h = height - top - bottom
@@ -317,7 +257,6 @@ def bar_chart(
 
 
 def quality_chart(results: list[dict], width: int = 720, height: int = 260) -> str:
-    """Stacked horizontal bar: how each symbol's candles were dispositioned."""
     left, right, top, bottom = 130, 24, 52, 54
     plot_w = width - left - right
     row_h = 30
@@ -381,10 +320,6 @@ def quality_chart(results: list[dict], width: int = 720, height: int = 260) -> s
     return "".join(parts)
 
 
-# ---------------------------------------------------------------------------
-# Page assembly
-# ---------------------------------------------------------------------------
-
 CSS = """
 :root { --ink:#1a1f26; --muted:#5b6470; --line:#e6e9ee; --bg:#f7f8fa; }
 * { box-sizing: border-box; }
@@ -430,7 +365,7 @@ def _metric_cards(result: dict, metric_fn) -> str:
     cards = []
     for m in metric_fn(result):
         if m["unit"] == "rows":
-            continue  # shown in the data-quality section instead
+            continue
         cards.append(
             f'<div class="metric"><span class="label">{_e(m["label"])}</span>'
             f'<span class="value">{_e(format_value(m["value"], m["unit"]))}</span></div>'
@@ -474,7 +409,6 @@ def _repair_table(result: dict) -> str:
 
 
 def _leaderboard(results: list[dict]) -> str:
-    """Ranked table of every symbol. The entry point for a wide pull."""
     scored = [r for r in results if r["rows"]]
     if not scored:
         return ""
@@ -504,11 +438,6 @@ def _leaderboard(results: list[dict]) -> str:
 
 def build_report(results: list[dict], run_id: str, metric_fn,
                  generated_at: datetime | None = None) -> str:
-    """Return the complete HTML document as a string.
-
-    `metric_fn` is `transform.metrics`, injected rather than imported so this
-    module stays testable in isolation.
-    """
     generated_at = generated_at or datetime.now()
     loaded = sum(r["summary"]["rows_kept"] for r in results)
     quarantined = sum(r["summary"]["rows_quarantined"] for r in results)
@@ -524,12 +453,9 @@ def build_report(results: list[dict], run_id: str, metric_fn,
         f'&middot; {loaded:,} rows loaded, {quarantined:,} quarantined</p>',
     ]
 
-    # --- Overview -------------------------------------------------------
     body.append("<h2>Overview</h2>")
 
     charted = [r for r in results if len(r["rows"]) >= 2]
-    # With many symbols, chart the extremes: the biggest risers and fallers
-    # are what a reader looks for, and a chart of 200 lines shows nothing.
     trimmed = len(charted) > MAX_COMPARISON_SERIES
     if trimmed:
         charted = sorted(
@@ -547,9 +473,6 @@ def build_report(results: list[dict], run_id: str, metric_fn,
                        for r in rows],
         })
     if rebased:
-        # The shared date axis: every trading day any symbol traded on, in
-        # order. Without this, symbols with different coverage would be drawn
-        # against each other's dates.
         all_dates = sorted({r["date"] for result in results
                             for r in result["rows"]})
         categories = [d.strftime("%d %b") for d in all_dates]
@@ -591,12 +514,8 @@ def build_report(results: list[dict], run_id: str, metric_fn,
         body.append(_leaderboard(results))
         body.append("</div>")
 
-    # --- Per symbol -----------------------------------------------------
     detail = results
     if len(results) > MAX_DETAIL_SECTIONS:
-        # Detail the extremes rather than everything: the table above already
-        # covers all of them, and 200 chart pairs is not a document anyone
-        # reads.
         ranked = sorted(
             [r for r in results if r["rows"]],
             key=lambda r: r["summary"]["period_return_pct"],
@@ -675,7 +594,6 @@ def build_report(results: list[dict], run_id: str, metric_fn,
 
 def write_report(results: list[dict], run_id: str, metric_fn,
                  path: str = DEFAULT_REPORT_PATH) -> str:
-    """Write the report and return the path written."""
     document = build_report(results, run_id, metric_fn)
     destination = Path(path)
     if destination.parent != Path(""):

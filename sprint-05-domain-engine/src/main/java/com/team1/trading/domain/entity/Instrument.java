@@ -2,14 +2,6 @@ package com.team1.trading.domain.entity;
 
 import java.time.LocalDateTime;
 
-/**
- * A tradable instrument. active/deactivate toggles whether it's currently
- * tradable;
- *
- * The symbol is the key. orders.instrument_id is VARCHAR(50) and holds the
- * symbol itself, which is also what PlaceOrderRequest.symbol carries, so one
- * instrument has one identity from the request through to the order row.
- */
 public class Instrument {
 
     private String instrumentId;
@@ -17,7 +9,6 @@ public class Instrument {
     private boolean active;
     private LocalDateTime updatedOn;
 
-    /** For a new instrument not yet persisted. */
     public Instrument(String instrumentId, String instrumentName) {
         this.instrumentId = instrumentId;
         this.instrumentName = instrumentName;
@@ -25,7 +16,6 @@ public class Instrument {
         this.updatedOn = null;
     }
 
-    /** For reconstructing an instrument already in storage. */
     public Instrument(String instrumentId, String instrumentName, boolean active, LocalDateTime deletedOn) {
         this.instrumentId = instrumentId;
         this.instrumentName = instrumentName;
@@ -33,7 +23,6 @@ public class Instrument {
         this.updatedOn = deletedOn;
     }
 
-    /** The symbol, as it appears on every order. */
     public String getInstrumentId() {
         return instrumentId;
     }
@@ -58,7 +47,6 @@ public class Instrument {
         this.active = false;
     }
 
-    /** Tradable only while active and not soft-deleted. */
     public boolean isTradable() {
         return active && updatedOn == null;
     }

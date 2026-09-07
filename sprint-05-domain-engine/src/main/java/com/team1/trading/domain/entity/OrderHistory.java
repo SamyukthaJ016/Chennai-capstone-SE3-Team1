@@ -5,13 +5,6 @@ import com.team1.trading.domain.entity.types.OrderStatus;
 import java.time.LocalDateTime;
 import java.util.Objects;
 
-/**
- * One row of the audit trail for one order. Replaces what the in_progress,
- * transaction_success and transaction_failure tables recorded between them.
- *
- * api_response holds the raw JSON the external API returned, kept as text -
- * this module carries it and never parses it.
- */
 public class OrderHistory {
 
     private Long historyId;
