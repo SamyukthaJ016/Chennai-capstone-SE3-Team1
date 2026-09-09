@@ -1,6 +1,7 @@
 package com.team1.trading.api.exception;
 
 import com.team1.trading.api.dto.ErrorResponse;
+import com.team1.trading.api.security.JwtAuthenticationException;
 import com.team1.trading.domain.exception.AccountNotActiveException;
 import com.team1.trading.domain.exception.AccountNotFoundException;
 import com.team1.trading.domain.exception.AuthenticationException;
@@ -78,6 +79,17 @@ public class GlobalExceptionHandler {
         List<FieldError> fieldErrors = e.getBindingResult().getFieldErrors();
         LOG.warn("Request validation failed fieldErrors={} message={}", fieldErrors, e.getMessage(), e);
         return envelope(ErrorCatalogue.VAL_422, VALIDATION_MESSAGE, HttpStatus.UNPROCESSABLE_ENTITY);
+    }
+
+    /**
+     * JWT verification failures: missing header, wrong scheme, expired token, or forged signature.
+     * All return AUTH-401 with an identical message so attackers cannot enumerate which failure
+     * occurred. The actual reason is logged server-side.
+     */
+    @ExceptionHandler(JwtAuthenticationException.class)
+    public ResponseEntity<ErrorResponse> handleJwtAuthentication(JwtAuthenticationException e) {
+        LOG.warn("JWT verification failed: {}", e.getMessage(), e);
+        return envelope(ErrorCatalogue.AUTH_401, "Unauthorized", HttpStatus.UNAUTHORIZED);
     }
 
     /**
