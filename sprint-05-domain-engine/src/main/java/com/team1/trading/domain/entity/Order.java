@@ -10,7 +10,7 @@ import java.util.Objects;
 
 public class Order {
 
-    private Long orderId;
+    private java.util.UUID orderId;
     private Long clientId;
     private Long accountId;
     private String instrumentId;
@@ -27,7 +27,7 @@ public class Order {
 
     public Order(Long clientId, Long accountId, String instrumentId, OrderType orderType,
                  OrderSide side, BigDecimal quantity, BigDecimal price, String idempotencyKey) {
-        this.clientId = Objects.requireNonNull(clientId, "userId must not be null");
+        this.clientId = Objects.requireNonNull(clientId, "clientId must not be null");
         this.accountId = Objects.requireNonNull(accountId, "accountId must not be null");
         this.instrumentId = Objects.requireNonNull(instrumentId, "instrumentId must not be null");
         this.orderType = Objects.requireNonNull(orderType, "orderType must not be null");
@@ -41,7 +41,7 @@ public class Order {
         this.updatedAt = this.createdAt;
     }
 
-    public Long getOrderId() { return orderId; }
+    public java.util.UUID getOrderId() { return orderId; }
     public Long getClientId() { return clientId; }
     public Long getAccountId() { return accountId; }
     public String getInstrumentId() { return instrumentId; }

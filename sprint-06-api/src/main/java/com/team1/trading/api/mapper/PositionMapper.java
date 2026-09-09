@@ -11,165 +11,103 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
 
-/**
- * SQL for the two portfolio tables. Every statement is fully parameterised with {@code #{} binds
- * and nothing else.
- *
- * <p>The buy is a single upsert: on conflict it recalculates the weighted average cost in the
- * database, which is the behaviour the domain's own cost model defines. The sell is guarded with
- * {@code quantity >= #{quantity}}, so it can never take a position negative.
- */
 @Mapper
 public interface PositionMapper {
 
     @Select("""
-            SELECT client_id      AS accountId,
-                   instrument_id  AS symbol,
-                   quantity,
-                   price_per_unit AS averageCost
-            FROM portfolio_positions
-            WHERE client_id = #{clientId}
-              AND quantity > 0
-            ORDER BY instrument_id
-            """)
-    List<PositionResponse> listPositions(@Param("clientId") Long clientId);
-
-    @Select("""
-            SELECT quantity, price_per_unit AS pricePerUnit
-            FROM portfolio_positions
-            WHERE client_id = #{clientId}
+            SELECT account_id AS accountId, instrument_id AS symbol, quantity, avg_price AS pricePerUnit
+            FROM positions
+            WHERE account_id = #{accountId}
               AND instrument_id = #{symbol}
             """)
-    Optional<PositionRow> findHeld(@Param("clientId") Long clientId, @Param("symbol") String symbol);
+    Optional<PositionRow> findHeld(@Param("accountId") Long accountId, @Param("symbol") String symbol);
+
+    @Select("""
+            SELECT instrument_id AS symbol, quantity, avg_price AS pricePerUnit
+            FROM positions
+            WHERE account_id = #{accountId}
+            """)
+    List<PositionResponse> listPositions(@Param("accountId") Long accountId);
 
     @Insert("""
-            INSERT INTO portfolio_positions (client_id, instrument_id, quantity, price_per_unit,
-                                             created_at, updated_at)
-            VALUES (#{update.clientId}, #{update.symbol}, #{update.quantity},
-                    #{update.pricePerUnit}, now(), now())
-            ON CONFLICT (client_id, instrument_id)
-            DO UPDATE SET
-                quantity = portfolio_positions.quantity + EXCLUDED.quantity,
-                price_per_unit = (portfolio_positions.quantity * portfolio_positions.price_per_unit
-                                + EXCLUDED.quantity * EXCLUDED.price_per_unit)
-                               / (portfolio_positions.quantity + EXCLUDED.quantity),
-                updated_at = now()
+            INSERT INTO positions (account_id, instrument_id, quantity, avg_price)
+            VALUES (#{pos.accountId}, #{pos.symbol}, #{pos.quantity}, #{pos.price})
+            ON CONFLICT (account_id, instrument_id)
+            DO UPDATE SET quantity = positions.quantity + EXCLUDED.quantity,
+                          avg_price = EXCLUDED.avg_price
             """)
-    int upsertBuy(PositionWrite update);
-
-    @Update("""
-            UPDATE portfolio_positions
-            SET quantity    = quantity - #{update.quantity},
-                updated_at  = now()
-            WHERE client_id = #{update.clientId}
-              AND instrument_id = #{update.symbol}
-              AND quantity  >= #{update.quantity}
-            """)
-    int reduceSell(PositionWrite update);
+    int upsertBuy(@Param("pos") PositionWrite pos);
 
     @Insert("""
-            INSERT INTO portfolio_holding (client_id, instrument_id, quantity, price_per_unit,
-                                           created_at, updated_at)
-            VALUES (#{update.clientId}, #{update.symbol}, #{update.quantity},
-                    #{update.pricePerUnit}, now(), now())
-            ON CONFLICT (client_id, instrument_id)
-            DO UPDATE SET
-                quantity = portfolio_holding.quantity + EXCLUDED.quantity,
-                price_per_unit = (portfolio_holding.quantity * portfolio_holding.price_per_unit
-                                + EXCLUDED.quantity * EXCLUDED.price_per_unit)
-                               / (portfolio_holding.quantity + EXCLUDED.quantity),
-                updated_at = now()
+            INSERT INTO holdings (account_id, instrument_id, quantity)
+            VALUES (#{pos.accountId}, #{pos.symbol}, #{pos.quantity})
+            ON CONFLICT (account_id, instrument_id)
+            DO UPDATE SET quantity = holdings.quantity + EXCLUDED.quantity
             """)
-    int upsertBuyHolding(PositionWrite update);
+    int upsertBuyHolding(@Param("pos") PositionWrite pos);
 
     @Update("""
-            UPDATE portfolio_holding
-            SET quantity    = quantity - #{update.quantity},
-                updated_at  = now()
-            WHERE client_id = #{update.clientId}
-              AND instrument_id = #{update.symbol}
-              AND quantity  >= #{update.quantity}
+            UPDATE positions
+            SET quantity = quantity - #{pos.quantity}
+            WHERE account_id = #{pos.accountId}
+              AND instrument_id = #{pos.symbol}
+              AND quantity >= #{pos.quantity}
             """)
-    int reduceSellHolding(PositionWrite update);
+    int reduceSell(@Param("pos") PositionWrite pos);
 
-    /**
-     * The held quantity read for a sell order.
-     */
+    @Update("""
+            UPDATE holdings
+            SET quantity = quantity - #{pos.quantity}
+            WHERE account_id = #{pos.accountId}
+              AND instrument_id = #{pos.symbol}
+              AND quantity >= #{pos.quantity}
+            """)
+    int reduceSellHolding(@Param("pos") PositionWrite pos);
+
     class PositionRow {
-
-        private Integer quantity;
-        private BigDecimal pricePerUnit;
-
-        public PositionRow() {
-        }
-
-        public Integer getQuantity() {
-            return quantity;
-        }
-
-        public void setQuantity(Integer quantity) {
-            this.quantity = quantity;
-        }
-
-        public BigDecimal getPricePerUnit() {
-            return pricePerUnit;
-        }
-
-        public void setPricePerUnit(BigDecimal pricePerUnit) {
-            this.pricePerUnit = pricePerUnit;
-        }
-    }
-
-    /**
-     * Parameter object for both portfolio write statements.
-     */
-    class PositionWrite {
-
-        private Long clientId;
+        private Long accountId;
         private String symbol;
         private Integer quantity;
         private BigDecimal pricePerUnit;
 
-        public PositionWrite() {
-        }
+        public Long getAccountId() { return accountId; }
+        public void setAccountId(Long accountId) { this.accountId = accountId; }
 
-        public PositionWrite(Long clientId, String symbol, Integer quantity, BigDecimal pricePerUnit) {
-            this.clientId = clientId;
+        public String getSymbol() { return symbol; }
+        public void setSymbol(String symbol) { this.symbol = symbol; }
+
+        public Integer getQuantity() { return quantity; }
+        public void setQuantity(Integer quantity) { this.quantity = quantity; }
+
+        public BigDecimal getPricePerUnit() { return pricePerUnit; }
+        public void setPricePerUnit(BigDecimal pricePerUnit) { this.pricePerUnit = pricePerUnit; }
+    }
+
+    class PositionWrite {
+        private Long accountId;
+        private String symbol;
+        private Integer quantity;
+        private BigDecimal price;
+
+        public PositionWrite() {}
+
+        public PositionWrite(Long accountId, String symbol, Integer quantity, BigDecimal price) {
+            this.accountId = accountId;
             this.symbol = symbol;
             this.quantity = quantity;
-            this.pricePerUnit = pricePerUnit;
+            this.price = price;
         }
 
-        public Long getClientId() {
-            return clientId;
-        }
+        public Long getAccountId() { return accountId; }
+        public void setAccountId(Long accountId) { this.accountId = accountId; }
 
-        public void setClientId(Long clientId) {
-            this.clientId = clientId;
-        }
+        public String getSymbol() { return symbol; }
+        public void setSymbol(String symbol) { this.symbol = symbol; }
 
-        public String getSymbol() {
-            return symbol;
-        }
+        public Integer getQuantity() { return quantity; }
+        public void setQuantity(Integer quantity) { this.quantity = quantity; }
 
-        public void setSymbol(String symbol) {
-            this.symbol = symbol;
-        }
-
-        public Integer getQuantity() {
-            return quantity;
-        }
-
-        public void setQuantity(Integer quantity) {
-            this.quantity = quantity;
-        }
-
-        public BigDecimal getPricePerUnit() {
-            return pricePerUnit;
-        }
-
-        public void setPricePerUnit(BigDecimal pricePerUnit) {
-            this.pricePerUnit = pricePerUnit;
-        }
+        public BigDecimal getPrice() { return price; }
+        public void setPrice(BigDecimal price) { this.price = price; }
     }
 }

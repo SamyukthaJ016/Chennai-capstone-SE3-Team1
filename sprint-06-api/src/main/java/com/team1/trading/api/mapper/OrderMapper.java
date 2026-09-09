@@ -14,33 +14,32 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * SQL for the orders table, the audit trail. Every statement is fully parameterised with
- * {@code #{} binds; nothing is concatenated into these strings.
- *
- * <p>The cancellation is a guarded transition inside the database, exactly as
- * contracts/trade-api.yaml demands: the status is not read and then updated in two statements,
- * the {@code WHERE status = 'NEW'} guard makes the transition atomic against the executor.
+ * Parameterised MyBatis Mapper for the orders table (OWASP A03 Compliant).
  */
 @Mapper
 public interface OrderMapper {
 
     @Insert("""
-            INSERT INTO orders (client_id, account_id, instrument_id, order_type, side, quantity,
-                                price, executed_price, status, idempotency_key, external_order_id,
-                                order_uuid, created_at, updated_at)
-            VALUES (#{order.clientId}, #{order.accountId}, #{order.instrumentId}, #{order.orderType},
-                    #{order.side}, #{order.quantity}, #{order.price}, #{order.executedPrice},
-                    #{order.status}, #{order.idempotencyKey}, #{order.externalOrderId},
-                    #{order.orderUuid}, now(), now())
+            INSERT INTO orders (
+                order_id, client_id, account_id, instrument_id, order_type, side, 
+                quantity, price, executed_price, status, idempotency_key, 
+                external_order_id, created_at, updated_at
+            ) VALUES (
+                #{order.orderUuid}::uuid, #{order.clientId}, #{order.accountId}, 
+                #{order.instrumentId}, #{order.orderType}, #{order.side}, 
+                #{order.quantity}, #{order.price}, #{order.executedPrice}, 
+                #{order.status}, #{order.idempotencyKey}, #{order.externalOrderId}, 
+                now(), now()
+            )
             """)
-    int insert(OrderInsert order);
+    int insert(@Param("order") OrderInsert order);
 
     @Select("""
-            SELECT order_uuid AS orderUuid, client_id AS clientId, account_id AS accountId,
+            SELECT order_id AS orderUuid, client_id AS clientId, account_id AS accountId,
                    instrument_id AS symbol, side, quantity, price, executed_price AS executedPrice,
                    status, idempotency_key AS idempotencyKey, created_at AS createdAt
             FROM orders
-            WHERE order_uuid = #{orderUuid}
+            WHERE order_id = #{orderUuid}::uuid
             """)
     Optional<OrderRow> findByUuid(@Param("orderUuid") String orderUuid);
 
@@ -48,33 +47,27 @@ public interface OrderMapper {
             UPDATE orders
             SET status     = 'CANCELLED',
                 updated_at = now()
-            WHERE order_uuid = #{orderUuid}
-              AND status     = 'NEW'
+            WHERE order_id = #{orderUuid}::uuid
+              AND status   = 'NEW'
             """)
     int markCancelled(@Param("orderUuid") String orderUuid);
 
     @Select("""
-            SELECT order_uuid AS orderUuid, client_id AS clientId, account_id AS accountId,
+            SELECT order_id AS orderUuid, client_id AS clientId, account_id AS accountId,
                    instrument_id AS symbol, side, quantity, price, executed_price AS executedPrice,
                    status, idempotency_key AS idempotencyKey, created_at AS createdAt
             FROM orders
             WHERE client_id = #{filter.clientId}
-              AND (   #{filter.status} IS NULL
-                   OR status = #{filter.status})
-              AND (   #{filter.from} IS NULL
-                   OR created_at >= #{filter.from})
-              AND (   #{filter.to} IS NULL
-                   OR created_at <= #{filter.to})
-            ORDER BY created_at DESC, order_id DESC
+              AND (#{filter.status, jdbcType=VARCHAR}::varchar IS NULL OR status = #{filter.status, jdbcType=VARCHAR}::varchar)
+              AND (#{filter.from, jdbcType=TIMESTAMP}::timestamp IS NULL OR created_at >= #{filter.from, jdbcType=TIMESTAMP}::timestamp)
+              AND (#{filter.to, jdbcType=TIMESTAMP}::timestamp IS NULL OR created_at <= #{filter.to, jdbcType=TIMESTAMP}::timestamp)
+            ORDER BY created_at DESC
             """)
-    List<OrderRow> listByAccount(OrderHistoryFilter filter);
+    List<OrderRow> listByAccount(@Param("filter") OrderHistoryFilter filter);
 
-    /**
-     * The order row as read for cancellation and history. The columns are aliased to the
-     * property names the result mapping uses.
-     */
+    // --- DTOs / Records for Clean Data Transfer ---
+
     class OrderRow {
-
         private String orderUuid;
         private Long clientId;
         private Long accountId;
@@ -87,104 +80,32 @@ public interface OrderMapper {
         private String idempotencyKey;
         private LocalDateTime createdAt;
 
-        public OrderRow() {
-        }
-
-        public String getOrderUuid() {
-            return orderUuid;
-        }
-
-        public void setOrderUuid(String orderUuid) {
-            this.orderUuid = orderUuid;
-        }
-
-        public Long getClientId() {
-            return clientId;
-        }
-
-        public void setClientId(Long clientId) {
-            this.clientId = clientId;
-        }
-
-        public Long getAccountId() {
-            return accountId;
-        }
-
-        public void setAccountId(Long accountId) {
-            this.accountId = accountId;
-        }
-
-        public String getSymbol() {
-            return symbol;
-        }
-
-        public void setSymbol(String symbol) {
-            this.symbol = symbol;
-        }
-
-        public OrderSide getSide() {
-            return side;
-        }
-
-        public void setSide(OrderSide side) {
-            this.side = side;
-        }
-
-        public Integer getQuantity() {
-            return quantity;
-        }
-
-        public void setQuantity(Integer quantity) {
-            this.quantity = quantity;
-        }
-
-        public BigDecimal getPrice() {
-            return price;
-        }
-
-        public void setPrice(BigDecimal price) {
-            this.price = price;
-        }
-
-        public BigDecimal getExecutedPrice() {
-            return executedPrice;
-        }
-
-        public void setExecutedPrice(BigDecimal executedPrice) {
-            this.executedPrice = executedPrice;
-        }
-
-        public OrderStatus getStatus() {
-            return status;
-        }
-
-        public void setStatus(OrderStatus status) {
-            this.status = status;
-        }
-
-        public String getIdempotencyKey() {
-            return idempotencyKey;
-        }
-
-        public void setIdempotencyKey(String idempotencyKey) {
-            this.idempotencyKey = idempotencyKey;
-        }
-
-        public LocalDateTime getCreatedAt() {
-            return createdAt;
-        }
-
-        public void setCreatedAt(LocalDateTime createdAt) {
-            this.createdAt = createdAt;
-        }
+        public String getOrderUuid() { return orderUuid; }
+        public void setOrderUuid(String orderUuid) { this.orderUuid = orderUuid; }
+        public Long getClientId() { return clientId; }
+        public void setClientId(Long clientId) { this.clientId = clientId; }
+        public Long getAccountId() { return accountId; }
+        public void setAccountId(Long accountId) { this.accountId = accountId; }
+        public String getSymbol() { return symbol; }
+        public void setSymbol(String symbol) { this.symbol = symbol; }
+        public OrderSide getSide() { return side; }
+        public void setSide(OrderSide side) { this.side = side; }
+        public Integer getQuantity() { return quantity; }
+        public void setQuantity(Integer quantity) { this.quantity = quantity; }
+        public BigDecimal getPrice() { return price; }
+        public void setPrice(BigDecimal price) { this.price = price; }
+        public BigDecimal getExecutedPrice() { return executedPrice; }
+        public void setExecutedPrice(BigDecimal executedPrice) { this.executedPrice = executedPrice; }
+        public OrderStatus getStatus() { return status; }
+        public void setStatus(OrderStatus status) { this.status = status; }
+        public String getIdempotencyKey() { return idempotencyKey; }
+        public void setIdempotencyKey(String idempotencyKey) { this.idempotencyKey = idempotencyKey; }
+        public LocalDateTime getCreatedAt() { return createdAt; }
+        public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     }
 
-    /**
-     * Parameter object for the insert. {@code orderType} is always {@code POSITION}; the status
-     * and executed price are terminal in the synchronous Sprint 6 fill.
-     */
     class OrderInsert {
-
+        private String orderUuid;
         private Long clientId;
         private Long accountId;
         private String instrumentId;
@@ -196,152 +117,46 @@ public interface OrderMapper {
         private String status;
         private String idempotencyKey;
         private String externalOrderId;
-        private String orderUuid;
 
-        public OrderInsert() {
-        }
-
-        public Long getClientId() {
-            return clientId;
-        }
-
-        public void setClientId(Long clientId) {
-            this.clientId = clientId;
-        }
-
-        public Long getAccountId() {
-            return accountId;
-        }
-
-        public void setAccountId(Long accountId) {
-            this.accountId = accountId;
-        }
-
-        public String getInstrumentId() {
-            return instrumentId;
-        }
-
-        public void setInstrumentId(String instrumentId) {
-            this.instrumentId = instrumentId;
-        }
-
-        public String getOrderType() {
-            return orderType;
-        }
-
-        public void setOrderType(String orderType) {
-            this.orderType = orderType;
-        }
-
-        public OrderSide getSide() {
-            return side;
-        }
-
-        public void setSide(OrderSide side) {
-            this.side = side;
-        }
-
-        public Integer getQuantity() {
-            return quantity;
-        }
-
-        public void setQuantity(Integer quantity) {
-            this.quantity = quantity;
-        }
-
-        public BigDecimal getPrice() {
-            return price;
-        }
-
-        public void setPrice(BigDecimal price) {
-            this.price = price;
-        }
-
-        public BigDecimal getExecutedPrice() {
-            return executedPrice;
-        }
-
-        public void setExecutedPrice(BigDecimal executedPrice) {
-            this.executedPrice = executedPrice;
-        }
-
-        public String getStatus() {
-            return status;
-        }
-
-        public void setStatus(String status) {
-            this.status = status;
-        }
-
-        public String getIdempotencyKey() {
-            return idempotencyKey;
-        }
-
-        public void setIdempotencyKey(String idempotencyKey) {
-            this.idempotencyKey = idempotencyKey;
-        }
-
-        public String getExternalOrderId() {
-            return externalOrderId;
-        }
-
-        public void setExternalOrderId(String externalOrderId) {
-            this.externalOrderId = externalOrderId;
-        }
-
-        public String getOrderUuid() {
-            return orderUuid;
-        }
-
-        public void setOrderUuid(String orderUuid) {
-            this.orderUuid = orderUuid;
-        }
+        public String getOrderUuid() { return orderUuid; }
+        public void setOrderUuid(String orderUuid) { this.orderUuid = orderUuid; }
+        public Long getClientId() { return clientId; }
+        public void setClientId(Long clientId) { this.clientId = clientId; }
+        public Long getAccountId() { return accountId; }
+        public void setAccountId(Long accountId) { this.accountId = accountId; }
+        public String getInstrumentId() { return instrumentId; }
+        public void setInstrumentId(String instrumentId) { this.instrumentId = instrumentId; }
+        public String getOrderType() { return orderType; }
+        public void setOrderType(String orderType) { this.orderType = orderType; }
+        public OrderSide getSide() { return side; }
+        public void setSide(OrderSide side) { this.side = side; }
+        public Integer getQuantity() { return quantity; }
+        public void setQuantity(Integer quantity) { this.quantity = quantity; }
+        public BigDecimal getPrice() { return price; }
+        public void setPrice(BigDecimal price) { this.price = price; }
+        public BigDecimal getExecutedPrice() { return executedPrice; }
+        public void setExecutedPrice(BigDecimal executedPrice) { this.executedPrice = executedPrice; }
+        public String getStatus() { return status; }
+        public void setStatus(String status) { this.status = status; }
+        public String getIdempotencyKey() { return idempotencyKey; }
+        public void setIdempotencyKey(String idempotencyKey) { this.idempotencyKey = idempotencyKey; }
+        public String getExternalOrderId() { return externalOrderId; }
+        public void setExternalOrderId(String externalOrderId) { this.externalOrderId = externalOrderId; }
     }
 
-    /**
-     * The account-scoped history query. Nullable status, from and to filters; the SQL keeps the
-     * statement parameterised by comparing each bind against {@code IS NULL}.
-     */
     class OrderHistoryFilter {
-
         private Long clientId;
         private OrderStatus status;
         private LocalDateTime from;
         private LocalDateTime to;
 
-        public OrderHistoryFilter() {
-        }
-
-        public Long getClientId() {
-            return clientId;
-        }
-
-        public void setClientId(Long clientId) {
-            this.clientId = clientId;
-        }
-
-        public OrderStatus getStatus() {
-            return status;
-        }
-
-        public void setStatus(OrderStatus status) {
-            this.status = status;
-        }
-
-        public LocalDateTime getFrom() {
-            return from;
-        }
-
-        public void setFrom(LocalDateTime from) {
-            this.from = from;
-        }
-
-        public LocalDateTime getTo() {
-            return to;
-        }
-
-        public void setTo(LocalDateTime to) {
-            this.to = to;
-        }
+        public Long getClientId() { return clientId; }
+        public void setClientId(Long clientId) { this.clientId = clientId; }
+        public OrderStatus getStatus() { return status; }
+        public void setStatus(OrderStatus status) { this.status = status; }
+        public LocalDateTime getFrom() { return from; }
+        public void setFrom(LocalDateTime from) { this.from = from; }
+        public LocalDateTime getTo() { return to; }
+        public void setTo(LocalDateTime to) { this.to = to; }
     }
 }
