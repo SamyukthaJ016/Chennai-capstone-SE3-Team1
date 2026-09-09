@@ -11,58 +11,70 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
 
+/**
+ * Parameterised MyBatis Mapper for portfolio_positions and portfolio_holding tables (OWASP A03 Compliant).
+ */
 @Mapper
 public interface PositionMapper {
 
     @Select("""
-            SELECT account_id AS accountId, instrument_id AS symbol, quantity, avg_price AS pricePerUnit
-            FROM positions
-            WHERE account_id = #{accountId}
+            SELECT client_id AS accountId, instrument_id AS symbol, quantity, price_per_unit AS pricePerUnit
+            FROM portfolio_positions
+            WHERE client_id = #{accountId}
               AND instrument_id = #{symbol}
             """)
     Optional<PositionRow> findHeld(@Param("accountId") Long accountId, @Param("symbol") String symbol);
 
     @Select("""
-            SELECT instrument_id AS symbol, quantity, avg_price AS pricePerUnit
-            FROM positions
-            WHERE account_id = #{accountId}
+            SELECT client_id AS accountId, instrument_id AS symbol, quantity, price_per_unit AS averageCost
+            FROM portfolio_positions
+            WHERE client_id = #{accountId}
+              AND quantity > 0
+            ORDER BY instrument_id ASC
             """)
     List<PositionResponse> listPositions(@Param("accountId") Long accountId);
 
     @Insert("""
-            INSERT INTO positions (account_id, instrument_id, quantity, avg_price)
-            VALUES (#{pos.accountId}, #{pos.symbol}, #{pos.quantity}, #{pos.price})
-            ON CONFLICT (account_id, instrument_id)
-            DO UPDATE SET quantity = positions.quantity + EXCLUDED.quantity,
-                          avg_price = EXCLUDED.avg_price
+            INSERT INTO portfolio_positions (client_id, instrument_id, quantity, price_per_unit, updated_at)
+            VALUES (#{pos.accountId}, #{pos.symbol}, #{pos.quantity}, #{pos.price}, now())
+            ON CONFLICT (client_id, instrument_id)
+            DO UPDATE SET quantity = portfolio_positions.quantity + EXCLUDED.quantity,
+                          price_per_unit = EXCLUDED.price_per_unit,
+                          updated_at = now()
             """)
     int upsertBuy(@Param("pos") PositionWrite pos);
 
     @Insert("""
-            INSERT INTO holdings (account_id, instrument_id, quantity)
-            VALUES (#{pos.accountId}, #{pos.symbol}, #{pos.quantity})
-            ON CONFLICT (account_id, instrument_id)
-            DO UPDATE SET quantity = holdings.quantity + EXCLUDED.quantity
+            INSERT INTO portfolio_holding (client_id, instrument_id, quantity, price_per_unit, updated_at)
+            VALUES (#{pos.accountId}, #{pos.symbol}, #{pos.quantity}, #{pos.price}, now())
+            ON CONFLICT (client_id, instrument_id)
+            DO UPDATE SET quantity = portfolio_holding.quantity + EXCLUDED.quantity,
+                          price_per_unit = EXCLUDED.price_per_unit,
+                          updated_at = now()
             """)
     int upsertBuyHolding(@Param("pos") PositionWrite pos);
 
     @Update("""
-            UPDATE positions
-            SET quantity = quantity - #{pos.quantity}
-            WHERE account_id = #{pos.accountId}
+            UPDATE portfolio_positions
+            SET quantity = quantity - #{pos.quantity},
+                updated_at = now()
+            WHERE client_id = #{pos.accountId}
               AND instrument_id = #{pos.symbol}
               AND quantity >= #{pos.quantity}
             """)
     int reduceSell(@Param("pos") PositionWrite pos);
 
     @Update("""
-            UPDATE holdings
-            SET quantity = quantity - #{pos.quantity}
-            WHERE account_id = #{pos.accountId}
+            UPDATE portfolio_holding
+            SET quantity = quantity - #{pos.quantity},
+                updated_at = now()
+            WHERE client_id = #{pos.accountId}
               AND instrument_id = #{pos.symbol}
               AND quantity >= #{pos.quantity}
             """)
     int reduceSellHolding(@Param("pos") PositionWrite pos);
+
+    // --- Inner DTOs ---
 
     class PositionRow {
         private Long accountId;

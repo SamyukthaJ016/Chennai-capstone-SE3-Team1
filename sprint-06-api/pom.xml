@@ -43,6 +43,7 @@
             <artifactId>mybatis-spring-boot-starter</artifactId>
             <version>3.0.5</version>
         </dependency>
+        <!-- Added explicit version tag below -->
         <dependency>
             <groupId>org.mybatis.spring.boot</groupId>
             <artifactId>mybatis-spring-boot-starter-test</artifactId>
