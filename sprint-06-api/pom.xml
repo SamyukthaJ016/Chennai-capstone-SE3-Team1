@@ -86,8 +86,8 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>
-            <!-- Code coverage for the Global Exception Handler JIRA: report is scoped to the
-                 three classes that JIRA owns. See target/site/jacoco/index.html after verify. -->
+            <!-- Code coverage for the Trade API Contract JIRA (+ the shared exception handler):
+                 report is scoped to this JIRA's classes. See target/site/jacoco/index.html after verify. -->
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
@@ -100,8 +100,12 @@
                         </goals>
                         <configuration>
                             <includes>
+                                <include>com/team1/trading/api/controller/*</include>
+                                <include>com/team1/trading/api/service/*</include>
+                                <include>com/team1/trading/api/mapper/*</include>
+                                <include>com/team1/trading/api/security/HeaderTokenAccountIdResolver*</include>
+                                <include>com/team1/trading/api/dto/*</include>
                                 <include>com/team1/trading/api/exception/*</include>
-                                <include>com/team1/trading/api/dto/ErrorResponse*</include>
                             </includes>
                         </configuration>
                     </execution>
@@ -113,8 +117,12 @@
                         </goals>
                         <configuration>
                             <includes>
+                                <include>com/team1/trading/api/controller/*</include>
+                                <include>com/team1/trading/api/service/*</include>
+                                <include>com/team1/trading/api/mapper/*</include>
+                                <include>com/team1/trading/api/security/HeaderTokenAccountIdResolver*</include>
+                                <include>com/team1/trading/api/dto/*</include>
                                 <include>com/team1/trading/api/exception/*</include>
-                                <include>com/team1/trading/api/dto/ErrorResponse*</include>
                             </includes>
                         </configuration>
                     </execution>
