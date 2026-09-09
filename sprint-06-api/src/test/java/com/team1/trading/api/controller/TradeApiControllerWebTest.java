@@ -5,11 +5,7 @@ import com.team1.trading.api.dto.BalanceResponse;
 import com.team1.trading.api.dto.OrderHistoryEntry;
 import com.team1.trading.api.dto.OrderResponse;
 import com.team1.trading.api.dto.PositionResponse;
-<<<<<<< Updated upstream
-import com.team1.trading.api.security.JwtValidator;
-=======
 import com.team1.trading.api.security.JwtVerificationFilter;
->>>>>>> Stashed changes
 import com.team1.trading.api.security.TokenAccountIdResolver;
 import com.team1.trading.api.service.AccountService;
 import com.team1.trading.api.service.OrderService;
@@ -80,9 +76,6 @@ class TradeApiControllerWebTest {
 
     @MockitoBean
     private TokenAccountIdResolver tokenAccountIdResolver;
-
-    @MockitoBean
-    private JwtValidator jwtValidator;
 
     @Nested
     @DisplayName("POST /api/v1/orders")

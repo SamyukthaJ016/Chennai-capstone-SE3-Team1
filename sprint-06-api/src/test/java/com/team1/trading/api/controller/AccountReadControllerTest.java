@@ -4,6 +4,7 @@ import com.team1.trading.api.dto.AccountResponse;
 import com.team1.trading.api.dto.BalanceResponse;
 import com.team1.trading.api.dto.OrderHistoryEntry;
 import com.team1.trading.api.dto.PositionResponse;
+import com.team1.trading.api.security.JwtVerificationFilter;
 import com.team1.trading.api.security.TokenAccountIdResolver;
 import com.team1.trading.api.service.AccountService;
 import com.team1.trading.domain.entity.types.AccountStatus;
@@ -16,6 +17,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.FilterType;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -31,7 +35,13 @@ import static org.mockito.BDDMockito.given;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-@WebMvcTest(AccountController.class)
+@WebMvcTest(controllers = AccountController.class,
+        excludeFilters = @ComponentScan.Filter(type = FilterType.ASSIGNABLE_TYPE, classes = JwtVerificationFilter.class))
+@TestPropertySource(properties = {
+        "jwt.secret=test-secret-key",
+        "jwt.issuer=auth-service",
+        "spring.datasource.url=jdbc:h2:mem:readtestdb;DB_CLOSE_DELAY=-1"
+})
 class AccountReadControllerTest {
 
     @Autowired

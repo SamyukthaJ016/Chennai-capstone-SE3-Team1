@@ -1,10 +1,6 @@
 package com.team1.trading.api.exception;
 
-<<<<<<< Updated upstream
-import com.team1.trading.api.security.JwtValidator;
-=======
 import com.team1.trading.api.security.JwtVerificationFilter;
->>>>>>> Stashed changes
 import com.team1.trading.domain.dto.PlaceOrderRequest;
 import com.team1.trading.domain.exception.AccountNotActiveException;
 import com.team1.trading.domain.exception.AccountNotFoundException;
@@ -26,11 +22,7 @@ import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.FilterType;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
-<<<<<<< Updated upstream
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
-=======
 import org.springframework.test.context.TestPropertySource;
->>>>>>> Stashed changes
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -66,9 +58,6 @@ class GlobalExceptionHandlerWebTest {
 
     @Autowired
     private MockMvc mockMvc;
-
-    @MockitoBean
-    private JwtValidator jwtValidator;
 
     @Nested
     @DisplayName("Every failure leaves the error envelope over HTTP")
