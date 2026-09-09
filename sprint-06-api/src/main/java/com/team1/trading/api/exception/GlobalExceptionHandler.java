@@ -10,6 +10,10 @@ import com.team1.trading.domain.exception.InstrumentNotFoundException;
 import com.team1.trading.domain.exception.InsufficientFundsException;
 import com.team1.trading.domain.exception.InsufficientHoldingsException;
 import com.team1.trading.domain.exception.InvalidOrderException;
+import com.team1.trading.domain.exception.OrderConflictException;
+import com.team1.trading.domain.exception.OrderNotCancellableException;
+import com.team1.trading.domain.exception.OrderNotFoundException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -41,12 +45,28 @@ public class GlobalExceptionHandler {
      * Every domain exception maps through the catalogue to its documented HTTP status. 404 is
      * shared by {@code ACC-404} and {@code INS-404}, and 409 carries {@code ORD-409}, so the
      * client branches on {@code errorCode}, never on the status alone.
+     *
+     * <p>One deviation is deliberate and contract-mandated: an order that cannot be found is
+     * served under HTTP 404 with {@code ORD-409} and "Order not found"
+     * (contracts/trade-api.yaml, DELETE /api/v1/orders/{id}).
      */
     @ExceptionHandler(DomainException.class)
     public ResponseEntity<ErrorResponse> handleDomainException(DomainException e) {
-        HttpStatus status = ErrorCatalogue.statusFor(e.getCode());
+        HttpStatus status = e instanceof OrderNotFoundException
+                ? HttpStatus.NOT_FOUND
+                : ErrorCatalogue.statusFor(e.getCode());
         LOG.warn("Rejected request [code={}] {}", e.getCode(), detailFor(e), e);
         return envelope(e.getCode(), e.getMessage(), status);
+    }
+
+    /**
+     * A query or path value that fails conversion (an unknown status, an unparseable instant)
+     * is invalid input, {@code VAL-422}.
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException e) {
+        LOG.warn("Request argument type mismatch name={} value={}", e.getName(), e.getValue(), e);
+        return envelope(ErrorCatalogue.VAL_422, VALIDATION_MESSAGE, HttpStatus.UNPROCESSABLE_ENTITY);
     }
 
     /**
@@ -103,6 +123,15 @@ public class GlobalExceptionHandler {
         }
         if (e instanceof DuplicateOrderException x) {
             return "idempotencyKey=" + x.getIdempotencyKey();
+        }
+        if (e instanceof OrderNotFoundException x) {
+            return "orderId=" + x.getOrderId();
+        }
+        if (e instanceof OrderNotCancellableException x) {
+            return "orderId=" + x.getOrderId() + ", status=" + x.getStatus();
+        }
+        if (e instanceof OrderConflictException x) {
+            return "reason=" + x.getReason();
         }
         if (e instanceof InvalidOrderException x) {
             return "field=" + x.getField() + ", rejectedValue=" + x.getRejectedValue();
