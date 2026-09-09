@@ -1,6 +1,10 @@
 package com.team1.trading.api.exception;
 
+<<<<<<< Updated upstream
 import com.team1.trading.api.security.JwtValidator;
+=======
+import com.team1.trading.api.security.JwtVerificationFilter;
+>>>>>>> Stashed changes
 import com.team1.trading.domain.dto.PlaceOrderRequest;
 import com.team1.trading.domain.exception.AccountNotActiveException;
 import com.team1.trading.domain.exception.AccountNotFoundException;
@@ -18,9 +22,15 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.FilterType;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+<<<<<<< Updated upstream
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+=======
+import org.springframework.test.context.TestPropertySource;
+>>>>>>> Stashed changes
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -44,7 +54,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * <p>The probe controller exists only inside this test; it is not deployed.
  */
-@WebMvcTest(controllers = GlobalExceptionHandlerWebTest.EnvelopeProbeController.class)
+@WebMvcTest(controllers = GlobalExceptionHandlerWebTest.EnvelopeProbeController.class,
+        excludeFilters = @ComponentScan.Filter(type = FilterType.ASSIGNABLE_TYPE, classes = JwtVerificationFilter.class))
+@TestPropertySource(properties = {
+    "jwt.secret=test-secret-key",
+    "jwt.issuer=auth-service",
+    "spring.datasource.url=jdbc:h2:mem:testdb",
+    "spring.datasource.driver-class-name=org.h2.Driver"
+})
 class GlobalExceptionHandlerWebTest {
 
     @Autowired

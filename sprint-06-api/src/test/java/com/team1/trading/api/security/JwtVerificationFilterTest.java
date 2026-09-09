@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -33,9 +34,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
+@ActiveProfiles("test")
 @TestPropertySource(properties = {
         "jwt.secret=" + TestJwtBuilder.TEST_SECRET,
-        "jwt.issuer=" + TestJwtBuilder.TEST_ISSUER
+        "jwt.issuer=" + TestJwtBuilder.TEST_ISSUER,
+        "spring.datasource.url=jdbc:h2:mem:jwtfilter;DB_CLOSE_DELAY=-1"
 })
 @DisplayName("JWT Verification Filter Integration Tests")
 class JwtVerificationFilterTest {

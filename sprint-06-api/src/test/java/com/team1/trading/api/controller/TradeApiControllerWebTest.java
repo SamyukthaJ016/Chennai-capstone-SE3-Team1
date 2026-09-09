@@ -5,7 +5,11 @@ import com.team1.trading.api.dto.BalanceResponse;
 import com.team1.trading.api.dto.OrderHistoryEntry;
 import com.team1.trading.api.dto.OrderResponse;
 import com.team1.trading.api.dto.PositionResponse;
+<<<<<<< Updated upstream
 import com.team1.trading.api.security.JwtValidator;
+=======
+import com.team1.trading.api.security.JwtVerificationFilter;
+>>>>>>> Stashed changes
 import com.team1.trading.api.security.TokenAccountIdResolver;
 import com.team1.trading.api.service.AccountService;
 import com.team1.trading.api.service.OrderService;
@@ -22,7 +26,10 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.FilterType;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -49,7 +56,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * keeps running, so a thrown domain exception and a body that fails validation both leave the
  * documented envelope over HTTP. No database or other container is started.
  */
-@WebMvcTest(controllers = {OrderController.class, AccountController.class})
+@WebMvcTest(controllers = {OrderController.class, AccountController.class},
+        excludeFilters = @ComponentScan.Filter(type = FilterType.ASSIGNABLE_TYPE, classes = JwtVerificationFilter.class))
+@TestPropertySource(properties = {
+    "jwt.secret=test-secret-key",
+    "jwt.issuer=auth-service",
+    "spring.datasource.url=jdbc:h2:mem:testdb",
+    "spring.datasource.driver-class-name=org.h2.Driver"
+})
 class TradeApiControllerWebTest {
 
     private static final String IDEMPOTENCY_KEY = "6f2b1c2a-6a1e-4a4f-9c0d-2f7a1b3c4d5e";
