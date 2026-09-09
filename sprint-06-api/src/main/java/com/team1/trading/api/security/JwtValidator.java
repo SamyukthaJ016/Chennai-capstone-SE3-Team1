@@ -21,7 +21,7 @@ import java.util.List;
  * that decodes the payload first has already trusted whatever the client sent, so we validate
  * before decoding.
  *
- * <p>All verification failures throw {@link JwtVerificationException}, which the filter
+ * <p>All verification failures throw {@link JWTVerificationException}, which the filter
  * translates to AUTH-401. The exception message is never exposed to the client, as per the
  * story requirement that all four failures return the same response body.
  */
@@ -50,13 +50,13 @@ public class JwtValidator {
      *
      * @param bearerToken the "Bearer <token>" header value
      * @return verified claims, never null
-     * @throws JwtVerificationException on any of: missing header, wrong scheme, invalid
+     * @throws JWTVerificationException on any of: missing header, wrong scheme, invalid
      *         signature, expired token, wrong algorithm
      * @throws IllegalArgumentException if required configuration is missing
      */
-    public JwtClaims verify(String bearerToken) throws JwtVerificationException {
+    public JwtClaims verify(String bearerToken) throws JWTVerificationException {
         if (bearerToken == null || !bearerToken.startsWith("Bearer ")) {
-            throw new JwtVerificationException("Missing or malformed Authorization header");
+            throw new JWTVerificationException("Missing or malformed Authorization header");
         }
 
         String token = bearerToken.substring("Bearer ".length());
@@ -68,13 +68,13 @@ public class JwtValidator {
             // Step 2: Read the algorithm from the header (before we've verified anything)
             String algorithmName = decodedUnverified.getHeaderClaim("alg").asString();
             if (algorithmName == null || algorithmName.isEmpty()) {
-                throw new JwtVerificationException("Missing algorithm in token header");
+                throw new JWTVerificationException("Missing algorithm in token header");
             }
 
             // Step 3: Create the algorithm and verify the signature
             // HS256 is the only algorithm supported per contracts/auth-api.yaml
             if (!"HS256".equals(algorithmName)) {
-                throw new JwtVerificationException("Unsupported or mismatched algorithm");
+                throw new JWTVerificationException("Unsupported or mismatched algorithm");
             }
 
             Algorithm algorithm = Algorithm.HMAC256(secret);
@@ -86,7 +86,7 @@ public class JwtValidator {
             // Step 4: Check expiry (already checked by JWT.require above, but be explicit)
             Instant expiresAt = verified.getExpiresAtAsInstant();
             if (expiresAt != null && expiresAt.isBefore(Instant.now())) {
-                throw new TokenExpiredException("Token has expired");
+                throw new TokenExpiredException("Token has expired", expiresAt);
             }
 
             // Step 5: Extract claims, with validation
@@ -97,7 +97,7 @@ public class JwtValidator {
             String issuer = verified.getIssuer();
 
             if (sub == null || accountId == null || roles == null || roles.isEmpty()) {
-                throw new JwtVerificationException("Missing or invalid claims in token");
+                throw new JWTVerificationException("Missing or invalid claims in token");
             }
 
             return new JwtClaims(sub, accountId, roles, issuedAt, expiresAt, issuer);
@@ -110,13 +110,13 @@ public class JwtValidator {
             throw e;
         } catch (JWTDecodeException e) {
             // Malformed token (not three dot-separated parts, invalid base64, etc.)
-            throw new JwtVerificationException("Invalid token format", e);
-        } catch (JwtVerificationException e) {
+            throw new JWTVerificationException("Invalid token format", e);
+        } catch (JWTVerificationException e) {
             // Re-throw JWT library exceptions
             throw e;
         } catch (Exception e) {
             // Catch any other exception and wrap it
-            throw new JwtVerificationException("Token verification failed: " + e.getMessage(), e);
+            throw new JWTVerificationException("Token verification failed: " + e.getMessage(), e);
         }
     }
 }

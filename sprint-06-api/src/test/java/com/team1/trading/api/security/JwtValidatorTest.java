@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import java.time.ChronoUnit;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.*;
@@ -38,7 +38,7 @@ class JwtValidatorTest {
 
         @Test
         void validates_a_well_formed_token_with_all_claims() {
-            String token = TestJwtBuilder.forAccount(1)
+            String token = TestJwtBuilder.forAccount(1L)
                     .withSub("user-123")
                     .withRoles("CUSTOMER")
                     .buildWithTestSecret();
@@ -54,7 +54,7 @@ class JwtValidatorTest {
 
         @Test
         void extracts_all_required_claims_from_a_valid_token() {
-            String token = TestJwtBuilder.forAccount(42)
+            String token = TestJwtBuilder.forAccount(42L)
                     .withSub("8f14e45f-ceea-4c1b-9d3b-1a2b3c4d5e6f")
                     .withRoles("CUSTOMER", "ADMIN")
                     .buildWithTestSecret();
@@ -70,7 +70,7 @@ class JwtValidatorTest {
 
         @Test
         void accepts_tokens_with_different_expiry_times() {
-            String token = TestJwtBuilder.forAccount(1)
+            String token = TestJwtBuilder.forAccount(1L)
                     .expiresIn(1, ChronoUnit.HOURS)
                     .buildWithTestSecret();
 
@@ -100,7 +100,7 @@ class JwtValidatorTest {
 
         @Test
         void rejects_header_with_wrong_scheme() {
-            String token = TestJwtBuilder.forAccount(1).buildWithTestSecret();
+            String token = TestJwtBuilder.forAccount(1L).buildWithTestSecret();
             String malformed = token.replace("Bearer ", "Basic ");
 
             assertThatThrownBy(() -> validator.verify(malformed))
@@ -109,7 +109,7 @@ class JwtValidatorTest {
 
         @Test
         void rejects_header_with_no_scheme() {
-            String token = TestJwtBuilder.forAccount(1).buildWithTestSecret();
+            String token = TestJwtBuilder.forAccount(1L).buildWithTestSecret();
             String malformed = token.replace("Bearer ", "");
 
             assertThatThrownBy(() -> validator.verify(malformed))
@@ -130,7 +130,7 @@ class JwtValidatorTest {
 
         @Test
         void rejects_token_signed_with_different_secret() {
-            String token = TestJwtBuilder.forAccount(1)
+            String token = TestJwtBuilder.forAccount(1L)
                     .buildWithTestSecret()
                     .replace("Bearer ", ""); // Remove scheme to re-sign
 
@@ -144,7 +144,7 @@ class JwtValidatorTest {
 
         @Test
         void rejects_forged_tokens() {
-            String token = TestJwtBuilder.forAccount(1).buildForged();
+            String token = TestJwtBuilder.forAccount(1L).buildForged();
 
             assertThatThrownBy(() -> validator.verify(token))
                     .isInstanceOf(JWTVerificationException.class);
@@ -152,7 +152,7 @@ class JwtValidatorTest {
 
         @Test
         void rejects_tampered_token_with_modified_payload() {
-            String originalToken = TestJwtBuilder.forAccount(1)
+            String originalToken = TestJwtBuilder.forAccount(1L)
                     .buildWithTestSecret()
                     .replace("Bearer ", "");
 
@@ -172,7 +172,7 @@ class JwtValidatorTest {
 
         @Test
         void rejects_token_with_expiry_in_the_past() {
-            String token = TestJwtBuilder.forAccount(1).buildExpired();
+            String token = TestJwtBuilder.forAccount(1L).buildExpired();
 
             assertThatThrownBy(() -> validator.verify(token))
                     .isInstanceOf(JWTVerificationException.class);
@@ -180,7 +180,7 @@ class JwtValidatorTest {
 
         @Test
         void rejects_token_that_expired_one_second_ago() {
-            String token = TestJwtBuilder.forAccount(1)
+            String token = TestJwtBuilder.forAccount(1L)
                     .expiresIn(-1, ChronoUnit.SECONDS)
                     .buildWithTestSecret();
 
@@ -233,7 +233,7 @@ class JwtValidatorTest {
         @Test
         void rejects_token_missing_sub_claim() {
             // This test uses the JWT library to build a token without the sub claim
-            String token = TestJwtBuilder.forAccount(1)
+            String token = TestJwtBuilder.forAccount(1L)
                     .withSub("") // Build with empty sub
                     .buildWithTestSecret();
 
@@ -261,7 +261,7 @@ class JwtValidatorTest {
         void rejects_token_with_empty_roles() {
             // The TestJwtBuilder prevents empty roles, so this is a contrived test
             // In real usage, the auth stub would always include at least one role
-            String token = TestJwtBuilder.forAccount(1)
+            String token = TestJwtBuilder.forAccount(1L)
                     .withRoles("CUSTOMER") // At least one role
                     .buildWithTestSecret();
 
@@ -279,7 +279,7 @@ class JwtValidatorTest {
             // Create a validator expecting a different issuer
             JwtValidator customValidator = new JwtValidator(TestJwtBuilder.TEST_SECRET, "wrong-issuer");
 
-            String token = TestJwtBuilder.forAccount(1).buildWithTestSecret();
+            String token = TestJwtBuilder.forAccount(1L).buildWithTestSecret();
 
             assertThatThrownBy(() -> customValidator.verify(token))
                     .isInstanceOf(JWTVerificationException.class);
@@ -304,14 +304,14 @@ class JwtValidatorTest {
 
         @Test
         void expired_token_throws_JWTVerificationException() {
-            String token = TestJwtBuilder.forAccount(1).buildExpired();
+            String token = TestJwtBuilder.forAccount(1L).buildExpired();
             assertThatThrownBy(() -> validator.verify(token))
                     .isInstanceOf(JWTVerificationException.class);
         }
 
         @Test
         void forged_signature_throws_JWTVerificationException() {
-            String token = TestJwtBuilder.forAccount(1).buildForged();
+            String token = TestJwtBuilder.forAccount(1L).buildForged();
             assertThatThrownBy(() -> validator.verify(token))
                     .isInstanceOf(JWTVerificationException.class);
         }

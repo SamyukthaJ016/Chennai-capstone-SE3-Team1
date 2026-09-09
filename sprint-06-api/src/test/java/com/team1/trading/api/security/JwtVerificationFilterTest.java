@@ -11,6 +11,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -18,14 +19,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Integration tests for JWT verification through the filter and global exception handler.
- *
- * <p>Tests verify that:
- * 1. All JWT verification failures return AUTH-401
- * 2. All four failure modes (missing header, wrong scheme, expired, forged) return identical
- *    error responses
- * 3. Valid tokens pass through the filter
- * 4. The error message does not reveal which specific failure occurred
+
+ Integration tests for JWT verification through the filter and global exception handler.
+
+ <p>Tests verify that:
+ All JWT verification failures return AUTH-401
+ All four failure modes (missing header, wrong scheme, expired, forged) return identical
+
+ error responses
+
+ Valid tokens pass through the filter
+ The error message does not reveal which specific failure occurred
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -43,7 +47,7 @@ class JwtVerificationFilterTest {
 
     @BeforeEach
     void setUp() {
-        validToken = TestJwtBuilder.forAccount(1)
+        validToken = TestJwtBuilder.forAccount(1L)
                 .withSub("user-123")
                 .withRoles("CUSTOMER")
                 .buildWithTestSecret();
@@ -64,7 +68,7 @@ class JwtVerificationFilterTest {
         @Test
         void rejects_request_with_null_authorization_header() throws Exception {
             mockMvc.perform(get("/api/v1/accounts/1")
-                    .header("Authorization", ""))
+                            .header("Authorization", ""))
                     .andExpect(status().isUnauthorized())
                     .andExpect(jsonPath("$.errorCode").value(ErrorCatalogue.AUTH_401));
         }
@@ -72,27 +76,27 @@ class JwtVerificationFilterTest {
         @Test
         void rejects_request_with_wrong_scheme() throws Exception {
             mockMvc.perform(get("/api/v1/accounts/1")
-                    .header("Authorization", "Basic invalid"))
+                            .header("Authorization", "Basic invalid"))
                     .andExpect(status().isUnauthorized())
                     .andExpect(jsonPath("$.errorCode").value(ErrorCatalogue.AUTH_401));
         }
 
         @Test
         void rejects_request_with_expired_token() throws Exception {
-            String expiredToken = TestJwtBuilder.forAccount(1).buildExpired();
+            String expiredToken = TestJwtBuilder.forAccount(1L).buildExpired();
 
             mockMvc.perform(get("/api/v1/accounts/1")
-                    .header("Authorization", expiredToken))
+                            .header("Authorization", expiredToken))
                     .andExpect(status().isUnauthorized())
                     .andExpect(jsonPath("$.errorCode").value(ErrorCatalogue.AUTH_401));
         }
 
         @Test
         void rejects_request_with_forged_token() throws Exception {
-            String forgedToken = TestJwtBuilder.forAccount(1).buildForged();
+            String forgedToken = TestJwtBuilder.forAccount(1L).buildForged();
 
             mockMvc.perform(get("/api/v1/accounts/1")
-                    .header("Authorization", forgedToken))
+                            .header("Authorization", forgedToken))
                     .andExpect(status().isUnauthorized())
                     .andExpect(jsonPath("$.errorCode").value(ErrorCatalogue.AUTH_401));
         }
@@ -100,10 +104,12 @@ class JwtVerificationFilterTest {
         @Test
         void rejects_request_with_malformed_token() throws Exception {
             mockMvc.perform(get("/api/v1/accounts/1")
-                    .header("Authorization", "Bearer invalid.token.here"))
+                            .header("Authorization", "Bearer invalid.token.here"))
                     .andExpect(status().isUnauthorized())
                     .andExpect(jsonPath("$.errorCode").value(ErrorCatalogue.AUTH_401));
         }
+
+
     }
 
     @Nested
@@ -130,13 +136,13 @@ class JwtVerificationFilterTest {
 
             // Wrong scheme
             String response2 = mockMvc.perform(get("/api/v1/accounts/1")
-                    .header("Authorization", "Basic wrong"))
+                            .header("Authorization", "Basic wrong"))
                     .andExpect(status().isUnauthorized())
                     .andReturn().getResponse().getContentAsString();
 
             // Expired token
             String response3 = mockMvc.perform(get("/api/v1/accounts/1")
-                    .header("Authorization", TestJwtBuilder.forAccount(1).buildExpired()))
+                            .header("Authorization", TestJwtBuilder.forAccount(1L).buildExpired()))
                     .andExpect(status().isUnauthorized())
                     .andReturn().getResponse().getContentAsString();
 
@@ -157,6 +163,8 @@ class JwtVerificationFilterTest {
                     .andExpect(jsonPath("$.message")
                             .value(not(containsString("scheme"))));
         }
+
+
     }
 
     @Nested
@@ -169,8 +177,10 @@ class JwtVerificationFilterTest {
             // The controller may return 404 if account doesn't exist, but that's different
             // from 401 (Unauthorized)
             mockMvc.perform(get("/api/v1/accounts/1")
-                    .header("Authorization", validToken))
-                    .andExpect(status().isNotEqualTo(401)); // Not 401 Unauthorized
+                            .header("Authorization", validToken))
+                    .andExpect(result ->
+                            assertThat(result.getResponse().getStatus(), not(401))
+                    );
         }
 
         @Test
@@ -179,9 +189,13 @@ class JwtVerificationFilterTest {
             // We can't directly test the context in MockMvc, but we can verify
             // the request reaches the controller (doesn't get rejected at filter level)
             mockMvc.perform(get("/api/v1/accounts/1")
-                    .header("Authorization", validToken))
-                    .andExpect(status().isNotEqualTo(401));
+                            .header("Authorization", validToken))
+                    .andExpect(result ->
+                            assertThat(result.getResponse().getStatus(), not(401))
+                    );
         }
+
+
     }
 
     @Nested
@@ -192,13 +206,19 @@ class JwtVerificationFilterTest {
         void skips_filter_for_non_api_routes() throws Exception {
             // Non-API routes should not require authorization
             mockMvc.perform(get("/health"))
-                    .andExpect(status().isNotEqualTo(401)); // Depends on what's available
+                    .andExpect(result ->
+                            assertThat(result.getResponse().getStatus(), not(401))
+                    );
         }
 
         @Test
         void skips_filter_for_root_path() throws Exception {
             mockMvc.perform(get("/"))
-                    .andExpect(status().isNotEqualTo(401));
+                    .andExpect(result ->
+                            assertThat(result.getResponse().getStatus(), not(401))
+                    );
         }
+
+
     }
 }

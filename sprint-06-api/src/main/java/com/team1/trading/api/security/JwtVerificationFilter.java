@@ -1,14 +1,18 @@
 package com.team1.trading.api.security;
 
 import com.auth0.jwt.exceptions.JWTVerificationException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Verifies JWT tokens for all routes under {@code /api/v1/}, before any controller runs.
@@ -20,18 +24,19 @@ import java.io.IOException;
  * downstream components (controllers, services) can access them via
  * {@link JwtRequestContext#getClaims()}.
  *
- * <p>All verification failures throw {@link JwtVerificationException}, which the
- * {@link GlobalExceptionHandler} catches and translates to AUTH-401 with an identical
- * response body for all four failure modes (missing header, wrong scheme, expired,
- * forged signature).
+ * <p>All verification failures (missing header, wrong scheme, expired, forged signature)
+ * return HTTP 401 with identical error body, preventing attackers from enumerating
+ * which validation step failed.
  */
 @Component
 public class JwtVerificationFilter extends OncePerRequestFilter {
 
     private final JwtValidator jwtValidator;
+    private final ObjectMapper objectMapper;
 
-    public JwtVerificationFilter(JwtValidator jwtValidator) {
+    public JwtVerificationFilter(JwtValidator jwtValidator, ObjectMapper objectMapper) {
         this.jwtValidator = jwtValidator;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -45,9 +50,10 @@ public class JwtVerificationFilter extends OncePerRequestFilter {
             JwtRequestContext.setClaims(claims);
             
             filterChain.doFilter(request, response);
-        } catch (JwtVerificationException e) {
-            // Let GlobalExceptionHandler catch and convert to AUTH-401
-            throw new JwtAuthenticationException("Token verification failed", e);
+        } catch (JWTVerificationException e) {
+            // JWT verification failed: send AUTH-401 response directly from filter
+            // (servlet filters are outside Spring's exception handler)
+            writeUnauthorizedResponse(response);
         } finally {
             JwtRequestContext.clear();
         }
@@ -58,5 +64,21 @@ public class JwtVerificationFilter extends OncePerRequestFilter {
         // Only apply to /api/v1/ routes
         String path = request.getRequestURI();
         return !path.startsWith("/api/v1/");
+    }
+
+    /**
+     * Writes a 401 Unauthorized response with the standard error envelope.
+     * The response body is identical for all four failure modes (missing header, wrong scheme,
+     * expired token, forged signature) so attackers cannot enumerate which validation failed.
+     */
+    private void writeUnauthorizedResponse(HttpServletResponse response) throws IOException {
+        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        
+        Map<String, String> errorBody = new HashMap<>();
+        errorBody.put("errorCode", "AUTH-401");
+        errorBody.put("message", "Unauthorized");
+        
+        response.getWriter().write(objectMapper.writeValueAsString(errorBody));
     }
 }
