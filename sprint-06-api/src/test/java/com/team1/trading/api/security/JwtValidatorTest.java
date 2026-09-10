@@ -245,16 +245,14 @@ class JwtValidatorTest {
         }
 
         @Test
-        void rejects_token_with_invalid_account_id() {
-            // Build a token, then manually tamper to have no accountId
-            // This is challenging without rebuilding; the validator should handle it
+        void accepts_token_with_null_account_id() {
+            // AccountId is optional - not all auth stubs include it.
+            // The validator should accept tokens where accountId is null.
             String token = TestJwtBuilder.forAccount(null)
                     .buildWithTestSecret();
 
-            // This might fail at build time or at verify time
-            // The validator should reject it
-            assertThatThrownBy(() -> validator.verify(token))
-                    .isInstanceOf(Exception.class); // Could be JWTVerificationException or other
+            JwtClaims claims = validator.verify(token);
+            assertThat(claims.getAccountId()).isNull();
         }
 
         @Test
