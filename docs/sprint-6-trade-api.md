@@ -6,13 +6,14 @@ Stories covered:
 |---|---|---|
 | 1 | Trade database schema (SEC3-91/94/95) | `migrations/`, `seed/`, `scripts/`, `tests/`, `infra/postgres/` |
 | 2 | Analytics & ingestion pipeline (Sprint 4 / SEC3-103) | `ETL_Analysis/` |
-| 3 | Domain engine (Sprint 5) | `sprint-06-api/src/main/java/com/team1/trading/domain/**` |
+| 3 | Domain engine (Sprint 5) | `sprint-05-domain-engine/**`, consumed as `com.team1.trading:domain-engine:1.0-SNAPSHOT` |
 | 4 | Trade order API (Sprint 6) | `sprint-06-api/**` |
-| 5 | Order history (cross-cutting) | `migrations/006_order_history.sql`, `seed/060_*`, domain `OrderHistory`, `OrderHistoryEntry`, order history endpoint |
+| 5 | Order history (cross-cutting) | `migrations/006_order_history.sql`, `seed/060_*`, `OrderHistory` entity + DTO, order history endpoint |
 
-> One repository note: Sprint 5's domain engine lives **inside** the Sprint 6
-> API now (moved in as source, dependency removed). So a single Maven build
-> proves both stories. See Story 3.
+> One repository note: Sprint 5's domain engine remains its **own Maven module**
+> (`sprint-05-domain-engine`). Sprint 6 depends on it as a jar:
+> `mvn install` it once, the API and the Docker build consume the artifact. See
+> Story 3.
 
 ---
 
@@ -183,11 +184,13 @@ behaviour unit-tested, and no Spring/MyBatis dependency in the domain code.
 
 ### 2. How it was implemented
 
-The engine was originally a standalone artifact
-(`sprint-05-domain-engine`). For Sprint 6 the domain source was **moved into the
-API** (`sprint-06-api/src/main/java/com/team1/trading/domain/**`, 28 files) and
-consumed as source; the `domain-engine` Maven dependency was removed
-(`sprint-06-api/pom.xml`), so a fresh Docker build needs no pre-installed jar.
+The engine is its own Maven module, `sprint-05-domain-engine`, and stays that
+way: entities, enums, exceptions and the order/portfolio rule chain are pure
+Java, framework-free, with their own `pom.xml` (artifactId `domain-engine`,
+version `1.0-SNAPSHOT`). Sprint 6 depends on the **artifact**, so the jar must
+be installed once (`mvn install`) before the API builds, and the Dockerfile
+installs the same jar into the image from `sprint-06-api/lib/` (see Story 4,
+AC8).
 
 Key contents:
 
@@ -207,6 +210,11 @@ Key contents:
 ### 3. Commands to test + proof
 
 ```bash
+# 1. Build + install the domain artifact (do this once per version)
+mvn -f sprint-05-domain-engine/pom.xml clean install
+# Proof: BUILD SUCCESS; jar at sprint-05-domain-engine/target/domain-engine-1.0-SNAPSHOT.jar
+
+# 2. Build + test the API against that artifact
 mvn -f sprint-06-api/pom.xml clean verify
 # Proof:
 #   [INFO] Tests run: 230, Failures: 0, Errors: 0, Skipped: 0
@@ -218,7 +226,7 @@ mvn -f sprint-06-api/pom.xml clean verify
 To prove the domain is framework-free:
 
 ```bash
-rg -l "org\.springframework|org\.apache\.ibatis" sprint-06-api/src/main/java/com/team1/trading/domain
+rg -l "org\.springframework|org\.apache\.ibatis" sprint-05-domain-engine/src/main
 # Proof: no matches (empty output)
 ```
 
@@ -285,12 +293,14 @@ sprint-06-api/
     security/   JwtValidator, JwtVerificationFilter, JwtClaims, JwtRequestContext,
                 HeaderTokenAccountIdResolver, TokenAccountIdResolver, JwtAuthenticationException
     exception/  ErrorCatalogue, GlobalExceptionHandler
-  src/main/java/com/team1/trading/domain/**   (Story 3, as source)
-  src/test/    unit + integration; 230 tests in total (incl. domain 94)
-  Dockerfile   multi-stage: maven:3.9.16-eclipse-temurin-21 → eclipse-temurin:21-jre
+  lib/          domain-engine-1.0-SNAPSHOT.jar (provided, see lib/README.md)
+  src/test/     unit + integration; 230 tests in total (incl. domain 94)
+  Dockerfile    multi-stage: maven:3.9.16-eclipse-temurin-21 → eclipse-temurin:21-jre
   .dockerignore
-  pom.xml      domain as source, spring-boot-starter-actuator, MyBatis, JWT (auth0), jacoco
+  pom.xml       domain-engine dependency on com.team1.trading:domain-engine:1.0-SNAPSHOT,
+                spring-boot-starter-actuator, MyBatis, JWT (auth0), jacoco
   application.properties   jwt.secret=${JWT_SECRET}, jwt.issuer, DB, mybatis
+sprint-05-domain-engine/   Story 3 module — source of the domain-engine jar
 infra/postgres/docker-compose.yml   postgres + trade-api on one network
 ```
 
@@ -508,7 +518,8 @@ ORDER BY created_at DESC
 migrations/ + seed/           --- Story 1: the schema the API reads and writes
         │
         ▼
-domain engine (as source)     --- Story 3: rules + exceptions, framework-free
+sprint-05-domain-engine       --- Story 3: rules + exceptions, framework-free
+   (domain-engine-1.0-SNAPSHOT.jar -> installed into Maven / Docker)
         │
         ▼
 sprint-06-api                 --- Story 4: JWT, envelope, transactions, Docker
@@ -517,9 +528,10 @@ ETL_Analysis/                 --- Story 2: analytics over candles, store+claims
 infra/postgres/docker-compose --- Story 4 AC8: postgres + trade-api, one network
 ```
 
-The master proof is one command:
+The master proof is two commands (domain jar first, then the API):
 
 ```bash
+mvn -f sprint-05-domain-engine/pom.xml clean install
 mvn -f sprint-06-api/pom.xml clean verify   # 230 tests, 0 failures, BUILD SUCCESS
 ```
 
