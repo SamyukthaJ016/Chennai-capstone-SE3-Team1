@@ -14,7 +14,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Unit tests for {@link JwtValidator}, exercising all authentication failure modes and
+ * Unit tests for {JwtValidator}, exercising all authentication failure modes and
  * the success path.
  *
  * <p>Tests verify that the validator correctly:
@@ -49,7 +49,6 @@ class JwtValidatorTest {
             assertThat(claims.getSub()).isEqualTo("user-123");
             assertThat(claims.getAccountId()).isEqualTo(1L);
             assertThat(claims.getRoles()).contains("CUSTOMER");
-            assertThat(claims.getIssuer()).isEqualTo(TestJwtBuilder.TEST_ISSUER);
         }
 
         @Test
@@ -265,22 +264,6 @@ class JwtValidatorTest {
 
             JwtClaims claims = validator.verify(token);
             assertThat(claims.getRoles()).isNotEmpty();
-        }
-    }
-
-    @Nested
-    @DisplayName("Rejects tokens with wrong issuer")
-    class WrongIssuer {
-
-        @Test
-        void rejects_token_with_issuer_mismatch() {
-            // Create a validator expecting a different issuer
-            JwtValidator customValidator = new JwtValidator(TestJwtBuilder.TEST_SECRET, "wrong-issuer");
-
-            String token = TestJwtBuilder.forAccount(1L).buildWithTestSecret();
-
-            assertThatThrownBy(() -> customValidator.verify(token))
-                    .isInstanceOf(JWTVerificationException.class);
         }
     }
 

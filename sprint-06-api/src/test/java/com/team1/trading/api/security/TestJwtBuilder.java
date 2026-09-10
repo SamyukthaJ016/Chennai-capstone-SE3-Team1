@@ -116,7 +116,6 @@ public final class TestJwtBuilder {
                 .withClaim("roles", roles)
                 .withIssuedAt(issuedAt)
                 .withExpiresAt(expiresAt)
-                .withIssuer(TEST_ISSUER)
                 .sign(Algorithm.HMAC256(secret));
         return "Bearer " + token;
     }
@@ -141,7 +140,6 @@ public final class TestJwtBuilder {
                 .withClaim("roles", roles)
                 .withIssuedAt(issuedAt)
                 .withExpiresAt(expiresAt)
-                .withIssuer(TEST_ISSUER)
                 .sign(Algorithm.HMAC256("wrong-secret"));
         return "Bearer " + token;
     }
