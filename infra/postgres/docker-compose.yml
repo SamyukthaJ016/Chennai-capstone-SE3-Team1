@@ -26,6 +26,41 @@ services:
       timeout: 5s
       retries: 24
       start_period: 20s
+    networks:
+      - trading_net
+
+  trade-api:
+    build:
+      context: ../../sprint-06-api
+      dockerfile: Dockerfile
+    container_name: team1_trade_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Postgres is reached by service name; localhost inside a container is the container.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-trading_platform}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-postgres}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      # Shared with the auth service; keep the same value in .env for test tokens.
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ISSUER: ${JWT_ISSUER:-auth-service}
+      TRADE_CURRENCY: ${TRADE_CURRENCY:-USD}
+    ports:
+      - "${TRADE_API_PORT:-8080}:8080"
+    networks:
+      - trading_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+networks:
+  trading_net:
+    name: trading_platform_net
 
 volumes:
   pgdata:
