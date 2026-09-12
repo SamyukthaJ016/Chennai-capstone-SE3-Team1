@@ -6,6 +6,7 @@ import logging
 import os
 import time
 from pathlib import Path
+import trustme_secrets as trustme
 
 try:
     import requests
@@ -16,9 +17,10 @@ DEFAULT_BASE_URL = "https://y4t9nq2bqf.execute-api.eu-west-2.amazonaws.com/v1"
 CACHE_DIR = Path(__file__).parent / ".cache"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = REPO_ROOT / ".env"
+trustme.use_key_file("leapcapstoneteam1-720d03.TM")
 
-KEY_ENV_VAR = "FAUXNANCE_API_KEY"
-BASE_URL_ENV_VAR = "FAUXNANCE_BASE_URL"
+KEY_VAR = "Fauxnance"
+BASE_URL_VAR = "Fauxnance_Endpoint"
 
 MAX_RETRIES = 3
 BACKOFF_BASE_SECONDS = 1.0
@@ -43,38 +45,24 @@ class MissingApiKey(RuntimeError):
     pass
 
 
-def _read_env_file() -> dict:
-    values = {}
-    if not ENV_FILE.is_file():
-        return values
-    for raw in ENV_FILE.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, val = line.partition("=")
-        values[key.strip().upper()] = val.strip().strip('"').strip("'")
-    return values
 
-
-def _setting(name: str, default: str | None = None) -> str | None:
-    return os.environ.get(name) or _read_env_file().get(name) or default
 
 
 def base_url() -> str:
-    return (_setting(BASE_URL_ENV_VAR) or DEFAULT_BASE_URL).rstrip("/")
+    return (trustme.get(BASE_URL_VAR) or DEFAULT_BASE_URL).rstrip("/")
 
 
 def _api_key() -> str:
-    key = _setting(KEY_ENV_VAR)
+    key = trustme.get(KEY_VAR)
     if not key:
         raise MissingApiKey(
-            f"{KEY_ENV_VAR} is not set. Put it in {ENV_FILE} as\n"
-            f"    {KEY_ENV_VAR}=your-key-here\n"
+            f"{KEY_VAR} is not set. Put it in {ENV_FILE} as\n"
+            f"    {KEY_VAR}=your-key-here\n"
             f"or export it in your shell. .env is git-ignored."
         )
     if key.startswith(("your-", "replace", "changeme")):
         raise MissingApiKey(
-            f"{KEY_ENV_VAR} still holds the placeholder value. Replace it "
+            f"{KEY_VAR} still holds the placeholder value. Replace it "
             f"with the key issued to you."
         )
     return key
@@ -138,8 +126,8 @@ def extract(
         if 400 <= response.status_code < 500:
             meaning = {
                 400: "bad request (a range over ten years?)",
-                401: f"no API key was sent; set {KEY_ENV_VAR}",
-                403: (f"the key in {KEY_ENV_VAR} reached Fauxnance and was "
+                401: f"no API key was sent; set {KEY_VAR}",
+                403: (f"the key in {KEY_VAR} reached Fauxnance and was "
                       f"refused. It is present but not accepted: check it is "
                       f"current, not revoked, and issued for {base_url()}"),
                 404: f"Fauxnance does not serve {symbol}",
